@@ -20,7 +20,7 @@ async function load(){
   if(r.error){console.error(r.error);$("#cards").innerHTML=`<p class="meta">${esc(r.error.message)}</p>`;return}
   rows=r.data||[];
   $("#cards").innerHTML=rows.map(renderRow).join("");
-  $$(".edit").forEach(b=>b.onclick=()=>openForm(view,rows.find(x=>x.id===b.dataset.id)));
+  $$(".edit").forEach(b=>b.onclick=()=>openForm(view,rows.find(x=>String(x.id)===String(b.dataset.id))));
   $$(".del").forEach(b=>b.onclick=()=>remove(b.dataset.id));
   $$('[data-check]').forEach(b=>b.onchange=async()=>{const {data:uData}=await db.auth.getUser();const u=uData.user;if(!u)return;const r=await db.from("todos").update({done:b.checked}).eq("id",b.dataset.check).eq("user_id",u.id);if(r.error)alert(r.error.message);await load()});
 }
