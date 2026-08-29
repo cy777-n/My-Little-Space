@@ -1,5 +1,5 @@
 const db=supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY),$=x=>document.querySelector(x),$$=x=>[...document.querySelectorAll(x)],esc=x=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const cats={food:["日式","韓式","義式","咖啡廳","餐酒館","其他"],wishlist:["台灣","日本","其他"],watchlist:["韓劇","陸劇","電影"]};
+const cats={food:["日式","韓式","義式","咖啡廳","餐酒館","其他"],wishlist:["台灣","日本","其他"],watchlist:["韓劇","陸劇","電影","其他"]};
 let view="home",cat=null,editing=null,rows=[],register=false;
 
 $("#switch").onclick=()=>{register=!register;$("#login button").textContent=register?"註冊":"登入";$("#switch").textContent=register?"已經有帳號？登入":"還沒有帳號？註冊";$("#hint").textContent=register?"建立帳號後就可以保存你的資料。":"登入後就可以保存你的資料。"};
