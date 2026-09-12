@@ -29,6 +29,9 @@ $("#back").onclick=home;
 $("#add").onclick=chooser;
 $("#add2").onclick=()=>openForm(view);
 $("#close").onclick=close;
+$("#closePhoto").onclick=closePhoto;
+$("#photoViewer").querySelector(".photo-shade").onclick=closePhoto;
+document.addEventListener("keydown",e=>{if(e.key==="Escape")closePhoto()});
 
 function home(){$("#home").classList.remove("hidden");$("#list").classList.add("hidden");view="home"}
 
@@ -84,6 +87,7 @@ async function load(){
     if(r.error)alert(r.error.message);await load()
   });
   $$('[data-attachment-delete]').forEach(b=>b.onclick=()=>removeAttachment(b.dataset.attachmentDelete,b.dataset.path));
+  $$('[data-photo-url]').forEach(b=>b.onclick=()=>openPhoto(b.dataset.photoUrl,b.dataset.photoName));
 }
 function renderRow(r){
   const att=attachmentsHtml(r.id);
@@ -103,8 +107,25 @@ function actions(id){return `<div class="actions"><button class="edit" data-id="
 function attachmentsHtml(id){
   const arr=attachmentsByItem[String(id)]||[];
   if(!arr.length)return"";
-  return `<div class="attachments"><div class="attachment-title">📎 附件</div><div class="attachment-grid">${arr.map(a=>{const link=safeUrl(a.public_url);return link?`<div class="attachment-item"><a href="${esc(link)}" target="_blank" rel="noopener"><img src="${esc(link)}" alt="${esc(a.file_name)}"></a><button type="button" class="attachment-remove" data-attachment-delete="${esc(a.id)}" data-path="${esc(a.storage_path)}">×</button></div>`:""}).join("")}</div></div>`
+  return `<div class="attachments"><div class="attachment-title">📎 附件</div><div class="attachment-grid">${arr.map(a=>{const link=safeUrl(a.public_url);return link?`<div class="attachment-item"><button type="button" class="attachment-preview" data-photo-url="${esc(link)}" data-photo-name="${esc(a.file_name)}"><img src="${esc(link)}" alt="${esc(a.file_name)}"></button><button type="button" class="attachment-remove" data-attachment-delete="${esc(a.id)}" data-path="${esc(a.storage_path)}">×</button></div>`:""}).join("")}</div></div>`
 }
+function openPhoto(url,name="圖片") {
+  const viewer=$("#photoViewer"),img=$("#photoViewerImg");
+  if(!viewer||!img)return;
+  img.src=url;
+  img.alt=name;
+  $("#photoViewerName").textContent=name||"圖片";
+  viewer.classList.remove("hidden");
+  document.body.classList.add("photo-open");
+}
+function closePhoto() {
+  const viewer=$("#photoViewer"),img=$("#photoViewerImg");
+  if(!viewer)return;
+  viewer.classList.add("hidden");
+  document.body.classList.remove("photo-open");
+  if(img)img.src="";
+}
+
 function memoUrlsHtml(raw){
   if(!raw)return"";
   const urls=String(raw).split(/\n+/).map(x=>x.trim()).filter(Boolean);

@@ -24,3 +24,15 @@
 .table-grid input{margin:0!important;padding:8px!important;border-radius:9px!important}
 .memo-editor{min-height:140px!important}
 .share-panel{display:flex;flex-direction:column;gap:12px}.share-panel .share-card{border:1px solid var(--line);border-radius:16px;padding:14px;background:#fffaf6}.share-actions{display:flex;gap:8px;flex-wrap:wrap}.share-actions button{padding:9px 12px;border-radius:11px;background:#f0e8df;color:#746b6a}.share-actions .primary{background:#9885c8;color:#fff}.scope-note{font-size:11px;color:var(--muted);line-height:1.6}.share-select{margin:6px 0 12px;padding:11px;border:1px solid var(--line);border-radius:13px;width:100%;background:#fffefc}.group-badge{display:inline-block;margin-left:6px;padding:3px 7px;border-radius:8px;background:#eee7fa;color:#7565a1;font-size:10px}.private-badge{display:inline-block;margin-left:6px;padding:3px 7px;border-radius:8px;background:#f3ece5;color:#857a76;font-size:10px}
+
+/* 圖片預覽：留在網站內關閉，不開新頁面，避免手機 Safari 按返回回到首頁 */
+.attachment-preview{display:block;width:72px;height:72px;padding:0;background:none;border-radius:12px;overflow:hidden}
+.attachment-preview img{display:block;width:100%;height:100%;object-fit:cover;border-radius:12px;border:1px solid var(--line)}
+.photo-viewer{position:fixed;inset:0;z-index:30;display:grid;place-items:center;padding:24px}
+.photo-shade{position:absolute;inset:0;background:rgba(35,31,38,.72)}
+.photo-box{position:relative;z-index:1;max-width:min(92vw,900px);max-height:90vh;display:flex;flex-direction:column;align-items:center;gap:10px}
+.photo-box img{display:block;max-width:92vw;max-height:78vh;width:auto;height:auto;object-fit:contain;border-radius:16px;box-shadow:0 16px 40px rgba(0,0,0,.28);background:#fff}
+.photo-close{position:absolute;right:-10px;top:-10px;z-index:2;width:38px;height:38px;border-radius:50%;background:#fff;color:#595563;font-size:25px;line-height:1;box-shadow:0 4px 14px rgba(0,0,0,.18)}
+.photo-name{max-width:80vw;color:#fff;font-size:12px;text-align:center;word-break:break-all;text-shadow:0 1px 3px rgba(0,0,0,.4)}
+body.photo-open{overflow:hidden}
+@media(max-width:700px){.photo-viewer{padding:18px}.photo-box img{max-width:94vw;max-height:78vh}.photo-close{right:-5px;top:-5px}}
