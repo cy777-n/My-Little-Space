@@ -254,14 +254,14 @@ async function shareManager(){
         <b>建立共用群組</b>
         <p class="scope-note">例如「室友」「旅行」「家人」。建立後可以把備忘錄或生活管理內容放進這個群組。</p>
         <input id="newGroupName" placeholder="群組名稱">
-        <input id="newGroupPass" type="password" placeholder="通關密語">
+        <input id="newGroupPass" type="text" placeholder="通關密語" autocomplete="off">
         <div class="share-actions"><button type="button" class="primary" id="createGroup">建立群組</button></div>
       </div>
       <div class="share-card">
         <b>加入共用群組</b>
         <p class="scope-note">輸入對方提供的群組名稱與通關密語即可加入。</p>
         <input id="joinGroupName" placeholder="群組名稱">
-        <input id="joinGroupPass" type="password" placeholder="通關密語">
+        <input id="joinGroupPass" type="text" placeholder="通關密語" autocomplete="off">
         <div class="share-actions"><button type="button" class="primary" id="joinGroup">加入群組</button></div>
       </div>
       <div class="share-card"><b>我目前的群組</b><div id="groupList">${groupHtml}</div></div>
