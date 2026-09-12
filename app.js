@@ -1,6 +1,7 @@
 const db=supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY),
 $=x=>document.querySelector(x),$$=x=>[...document.querySelectorAll(x)],
 esc=x=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+safeUrl=x=>{try{const u=new URL(String(x??""),location.href);return ["http:","https:"].includes(u.protocol)?u.href:""}catch{return""}};
 
 const cats={
   food:["日式","韓式","義式","咖啡廳","餐酒館","其他"],
@@ -86,7 +87,7 @@ async function load(){
 }
 function renderRow(r){
   const att=attachmentsHtml(r.id);
-  if(view==="food")return card(`🍽️ ${esc(r.name)}`,`${r.mrt?`🚇 ${esc(r.mrt)} `:""}${r.exit?`🚪 ${esc(r.exit)}號出口 `:""}${r.walk_minutes!=null?`🚶🏻‍♀️ ${r.walk_minutes} 分鐘`:""}`,r.maps_url?`<a class="meta" href="${esc(r.maps_url)}" target="_blank" rel="noopener">🗺️ Google Maps</a>`:"",r,att);
+  if(view==="food")return card(`🍽️ ${esc(r.name)}`,`${r.mrt?`🚇 ${esc(r.mrt)} `:""}${r.exit?`🚪 ${esc(r.exit)}號出口 `:""}${r.walk_minutes!=null?`🚶🏻‍♀️ ${r.walk_minutes} 分鐘`:""}`,safeUrl(r.maps_url)?`<a class="meta" href="${esc(safeUrl(r.maps_url))}" target="_blank" rel="noopener">🗺️ Google Maps</a>`:"",r,att);
   if(view==="wishlist")return card(`🛍️ ${esc(r.name)}`,r.purchase_place?`📍 ${esc(r.purchase_place)}`:"","",r,att);
   if(view==="watchlist")return card(`✦ ${esc(r.name)}`,"","",r,att);
   if(view==="memo")return `<article class="card"><div class="name">📝 ${esc(r.title||"未命名備忘錄")}${scopeBadge(r)}</div>${r.content?`<div class="memo-content">${esc(r.content).replace(/\n/g,"<br>")}</div>`:""}${memoUrlsHtml(r.urls)}${tableHtml(r.table_data)}${att}${actions(r.id)}</article>`;
@@ -102,13 +103,13 @@ function actions(id){return `<div class="actions"><button class="edit" data-id="
 function attachmentsHtml(id){
   const arr=attachmentsByItem[String(id)]||[];
   if(!arr.length)return"";
-  return `<div class="attachments"><div class="attachment-title">📎 附件</div><div class="attachment-grid">${arr.map(a=>`<div class="attachment-item"><a href="${esc(a.public_url)}" target="_blank" rel="noopener"><img src="${esc(a.public_url)}" alt="${esc(a.file_name)}"></a><button type="button" class="attachment-remove" data-attachment-delete="${esc(a.id)}" data-path="${esc(a.storage_path)}">×</button></div>`).join("")}</div></div>`
+  return `<div class="attachments"><div class="attachment-title">📎 附件</div><div class="attachment-grid">${arr.map(a=>{const link=safeUrl(a.public_url);return link?`<div class="attachment-item"><a href="${esc(link)}" target="_blank" rel="noopener"><img src="${esc(link)}" alt="${esc(a.file_name)}"></a><button type="button" class="attachment-remove" data-attachment-delete="${esc(a.id)}" data-path="${esc(a.storage_path)}">×</button></div>`:""}).join("")}</div></div>`
 }
 function memoUrlsHtml(raw){
   if(!raw)return"";
   const urls=String(raw).split(/\n+/).map(x=>x.trim()).filter(Boolean);
   if(!urls.length)return"";
-  return `<div class="memo-urls"><div class="attachment-title">🔗 網址</div>${urls.map(u=>`<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a>`).join("")}</div>`
+  return `<div class="memo-urls"><div class="attachment-title">🔗 網址</div>${urls.map(u=>{const link=safeUrl(u);return link?`<a href="${esc(link)}" target="_blank" rel="noopener">${esc(u)}</a>`:`<span class="meta">${esc(u)}</span>`}).join("")}</div>`
 }
 function tableHtml(raw){
   let data=raw;

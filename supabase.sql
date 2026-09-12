@@ -3,7 +3,7 @@
 -- Adds the optional memo area, image attachments, URLs and tables,
 -- while keeping the existing food/wishlist/watchlist/todos data.
 
-create extension if not exists "pgcrypto";
+create extension if not exists pgcrypto with schema extensions;
 
 create table if not exists public.memos (
   id uuid primary key default gen_random_uuid(),
@@ -142,12 +142,27 @@ language plpgsql
 security definer
 set search_path = public
 as $$
-declare gid uuid; uid uuid := auth.uid();
+declare
+  gid uuid;
+  uid uuid := auth.uid();
+  crypto_schema text;
+  pass_hash text;
 begin
   if uid is null then raise exception '請先登入'; end if;
   if length(trim(p_name)) < 1 or length(p_passcode) < 1 then raise exception '請輸入群組名稱與密碼'; end if;
+
+  select n.nspname into crypto_schema
+  from pg_extension e
+  join pg_namespace n on n.oid=e.extnamespace
+  where e.extname='pgcrypto'
+  limit 1;
+  if crypto_schema is null then raise exception '尚未啟用 pgcrypto 擴充功能'; end if;
+
+  execute format('select %I.crypt($1, %I.gen_salt(''bf''))', crypto_schema, crypto_schema)
+    into pass_hash using p_passcode;
+
   insert into public.share_groups(name,passcode_hash,owner_id)
-  values(trim(p_name),crypt(p_passcode,gen_salt('bf')),uid)
+  values(trim(p_name),pass_hash,uid)
   returning id into gid;
   insert into public.share_group_members(group_id,user_id,role) values(gid,uid,'owner');
   return gid;
@@ -159,10 +174,23 @@ language plpgsql
 security definer
 set search_path = public
 as $$
-declare gid uuid; uid uuid := auth.uid();
+declare
+  gid uuid;
+  uid uuid := auth.uid();
+  crypto_schema text;
 begin
   if uid is null then raise exception '請先登入'; end if;
-  select id into gid from public.share_groups where name=trim(p_name) and passcode_hash=crypt(p_passcode,passcode_hash) limit 1;
+  if length(trim(p_name)) < 1 or length(p_passcode) < 1 then raise exception '請輸入群組名稱與密碼'; end if;
+
+  select n.nspname into crypto_schema
+  from pg_extension e
+  join pg_namespace n on n.oid=e.extnamespace
+  where e.extname='pgcrypto'
+  limit 1;
+  if crypto_schema is null then raise exception '尚未啟用 pgcrypto 擴充功能'; end if;
+
+  execute format('select id from public.share_groups where name=$1 and passcode_hash=%I.crypt($2,passcode_hash) limit 1', crypto_schema)
+    into gid using trim(p_name), p_passcode;
   if gid is null then raise exception '群組名稱或密碼不正確'; end if;
   insert into public.share_group_members(group_id,user_id,role) values(gid,uid,'member') on conflict do nothing;
   return gid;
@@ -252,7 +280,32 @@ with check (bucket_id='attachments' and (storage.foldername(name))[1]=auth.uid()
 
 create policy attachments_storage_delete on storage.objects
 for delete to authenticated
-using (bucket_id='attachments' and (storage.foldername(name))[1]=auth.uid()::text);
+using (
+  bucket_id='attachments'
+  and (
+    (storage.foldername(name))[1]=auth.uid()::text
+    or exists (
+      select 1
+      from public.attachments a
+      where a.storage_path=name
+        and (
+          a.user_id=auth.uid()
+          or exists (
+            select 1 from public.todos t
+            where a.item_type='todo'
+              and t.id::text=a.item_id
+              and public.is_share_group_member(t.share_group_id)
+          )
+          or exists (
+            select 1 from public.memos m
+            where a.item_type='memo'
+              and m.id::text=a.item_id
+              and public.is_share_group_member(m.share_group_id)
+          )
+        )
+    )
+  )
+);
 
 create index if not exists food_user_created_idx on public.food(user_id,created_at desc);
 create index if not exists wishlist_user_created_idx on public.wishlist(user_id,created_at desc);
