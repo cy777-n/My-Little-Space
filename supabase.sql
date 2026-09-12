@@ -145,7 +145,7 @@ as $$
 declare gid uuid; uid uuid := auth.uid();
 begin
   if uid is null then raise exception '請先登入'; end if;
-  if length(trim(p_name)) < 1 or length(p_passcode) < 1 then raise exception '請輸入群組名稱與通關密語'; end if;
+  if length(trim(p_name)) < 1 or length(p_passcode) < 1 then raise exception '請輸入群組名稱與密碼'; end if;
   insert into public.share_groups(name,passcode_hash,owner_id)
   values(trim(p_name),crypt(p_passcode,gen_salt('bf')),uid)
   returning id into gid;
@@ -163,7 +163,7 @@ declare gid uuid; uid uuid := auth.uid();
 begin
   if uid is null then raise exception '請先登入'; end if;
   select id into gid from public.share_groups where name=trim(p_name) and passcode_hash=crypt(p_passcode,passcode_hash) limit 1;
-  if gid is null then raise exception '群組名稱或通關密語不正確'; end if;
+  if gid is null then raise exception '群組名稱或密碼不正確'; end if;
   insert into public.share_group_members(group_id,user_id,role) values(gid,uid,'member') on conflict do nothing;
   return gid;
 end $$;
