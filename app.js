@@ -50,7 +50,7 @@ function catArea(){return view==="todo"?"todo":view==="memo"?"memo":view}
 function catColumn(){return view==="todo"?"event_type":view==="wishlist"?"country":"category"}
 function categoryScopeKey(){return selectedScope==="group"&&selectedGroupId?`group:${selectedGroupId}`:`user:${currentUserId||""}`}
 function customCategoryList(){return customCats[categoryScopeKey()]?.[catArea()]||[]}
-function allCategories(){return customCategoryList()}
+function allCategories(){return view==="memo"?[]:customCategoryList()}
 function defaultCategoriesForArea(area){return area==="todo"?["提醒事項","行程"]:area==="memo"?[]:(cats[area]||[])}
 function renderCats(){
   if(view==="memo"){ $("#cats").innerHTML=""; return; }
@@ -72,7 +72,7 @@ async function loadCategories(){
   if(r.error){console.error(r.error);return}
   if(ir.error){console.error(ir.error);return}
   customCats[scopeKey]={}; const existing=(r.data||[]).filter(x=>!(x.area==="memo"&&x.label==="全部")), initialized=new Set((ir.data||[]).map(x=>x.area));
-  for(const area of ["food","wishlist","watchlist","todo","memo"]){
+  for(const area of ["food","wishlist","watchlist","todo"]){
     let areaRows=existing.filter(x=>x.area===area).sort((a,b)=>a.sort_order-b.sort_order);
     let ownerId=u.id,groupId=null;
     if(selectedScope==="group"&&selectedGroupId){const g=groups.find(x=>x.id===selectedGroupId);if(!g)continue;groupId=selectedGroupId;ownerId=g.owner_id||u.id;}
@@ -142,7 +142,8 @@ async function load(){
   if(!u)return;
   await loadGroups();
   await loadCategories();
-  if(!allCategories().includes(cat))cat=allCategories()[0]||"";
+  if(view==="memo")cat=null;
+  else if(!allCategories().includes(cat))cat=allCategories()[0]||"";
   renderCats();
   let q;
   if(view==="memo"||view==="todo") {
@@ -152,7 +153,6 @@ async function load(){
       q=db.from(table).select("*").eq("user_id",u.id).is("share_group_id",null);
     }
     if(view!=="memo" && cat)q=q.eq(filterColumn(),cat);
-    if(view==="memo" && cat && cat!=="全部")q=q.eq("category",cat);
   } else {
     if(selectedScope==="group" && selectedGroupId){
       q=db.from(table).select("*").eq("share_group_id",selectedGroupId);
@@ -160,7 +160,6 @@ async function load(){
       q=db.from(table).select("*").eq("user_id",u.id).is("share_group_id",null);
     }
     if(view!=="memo" && cat)q=q.eq(filterColumn(),cat);
-    if(view==="memo" && cat && cat!=="全部")q=q.eq("category",cat);
   }
   const r=await q.order("created_at",{ascending:false});
   if(r.error){console.error(r.error);$("#cards").innerHTML=`<p class="meta">${esc(r.error.message)}</p>`;return}
