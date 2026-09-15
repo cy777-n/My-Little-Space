@@ -9,7 +9,7 @@ const cats={
   watchlist:["韓劇","陸劇","電影","其他"]
 };
 const ATTACH_BUCKET="attachments";
-let view="home",cat=null,editing=null,rows=[],register=false,attachmentsByItem={},groups=[],selectedScope="private",selectedGroupId=null;
+let view="home",cat=null,editing=null,rows=[],register=false,attachmentsByItem={},groups=[],selectedScope="private",selectedGroupId=null,starredGroups=[],customCats={},groupOrder=[],currentUserId=null;
 
 $("#switch").onclick=()=>{
   register=!register;
@@ -28,37 +28,121 @@ $$('[data-view]').forEach(b=>b.onclick=()=>openView(b.dataset.view));
 $("#back").onclick=home;
 $("#add").onclick=chooser;
 $("#add2").onclick=()=>openForm(view);
+$("#scopePicker").onchange=e=>selectScope(e.target.value);
 $("#close").onclick=close;
 $("#closePhoto").onclick=closePhoto;
 $("#photoViewer").querySelector(".photo-shade").onclick=closePhoto;
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closePhoto()});
 
-function home(){$("#home").classList.remove("hidden");$("#list").classList.add("hidden");view="home"}
+function home(){$("#home").classList.remove("hidden");$("#list").classList.add("hidden");view="home";renderScopePicker()}
 
 function openView(v){
   view=v;
-  selectedScope="private"; selectedGroupId=null;
-  cat=v==="todo"?"提醒事項":v==="memo"?null:cats[v][0];
+  cat=v==="todo"?"提醒事項":v==="memo"?"全部":cats[v][0];
   $("#home").classList.add("hidden");
   $("#list").classList.remove("hidden");
-  $("#title").textContent=v==="todo"?"生活管理":v==="food"?"食物":v==="wishlist"?"想買":v==="watchlist"?"影劇":"備忘錄";
-  $("#share").classList.toggle("hidden", !(v==="todo"||v==="memo"));
-  $("#share").textContent="👥 群組空間";
+  $("#title").textContent=areaTitle(v);
+  $("#share").classList.add("hidden");
   renderCats();
   load()
 }
+function catArea(){return view==="todo"?"todo":view==="memo"?"memo":view}
+function catColumn(){return view==="todo"?"event_type":view==="wishlist"?"country":"category"}
+function categoryScopeKey(){return selectedScope==="group"&&selectedGroupId?`group:${selectedGroupId}`:`user:${currentUserId||""}`}
+function customCategoryList(){return customCats[categoryScopeKey()]?.[catArea()]||[]}
+function allCategories(){return customCategoryList()}
+function defaultCategoriesForArea(area){return area==="todo"?["提醒事項","行程"]:area==="memo"?["全部"]:(cats[area]||[])}
 function renderCats(){
-  const list=view==="todo"?["提醒事項","行程"]:view==="memo"?[]:cats[view];
-  $("#cats").innerHTML=list.map(c=>`<button class="${c===cat?"active":""}" data-cat="${esc(c)}">${esc(c)}</button>`).join("");
-  $$('[data-cat]').forEach(b=>b.onclick=()=>{cat=b.dataset.cat;renderCats();load()})
+  const list=allCategories();
+  $("#cats").innerHTML=list.map(c=>`<div class="cat-wrap"><button class="${c===cat?"active":""}" data-cat="${esc(c)}">${esc(c)}</button><button type="button" class="cat-remove" data-remove-cat="${esc(c)}" title="刪除分類">×</button></div>`).join("")+`<button type="button" class="cat-add" id="addCategory">＋ 新增</button>`;
+  $$('[data-cat]').forEach(b=>b.onclick=()=>{cat=b.dataset.cat;renderCats();load()});
+  $$('[data-remove-cat]').forEach(b=>b.onclick=()=>removeCustomCategory(b.dataset.removeCat));
+  $("#addCategory").onclick=addCustomCategory;
+  enableCategoryDrag();
 }
-function filterColumn(){return view==="todo"?"event_type":view==="wishlist"?"country":"category"}
-
+function filterColumn(){return catColumn()}
+async function loadCategories(){
+  const {data:uData}=await db.auth.getUser(),u=uData.user;if(!u)return;
+  currentUserId=u.id; const scopeKey=categoryScopeKey();
+  let q=db.from("space_categories").select("id,area,label,sort_order,user_id,share_group_id");
+  let iq=db.from("space_category_scopes").select("area,defaults_migrated,defaults_restored_v27");
+  if(selectedScope==="group"&&selectedGroupId){q=q.eq("share_group_id",selectedGroupId);iq=iq.eq("share_group_id",selectedGroupId)}else{q=q.eq("user_id",u.id).is("share_group_id",null);iq=iq.eq("user_id",u.id).is("share_group_id",null)}
+  const [r,ir]=await Promise.all([q.order("sort_order",{ascending:true}),iq]);
+  if(r.error){console.error(r.error);return}
+  if(ir.error){console.error(ir.error);return}
+  customCats[scopeKey]={}; const existing=r.data||[], initialized=new Set((ir.data||[]).map(x=>x.area));
+  for(const area of ["food","wishlist","watchlist","todo","memo"]){
+    let areaRows=existing.filter(x=>x.area===area).sort((a,b)=>a.sort_order-b.sort_order);
+    let ownerId=u.id,groupId=null;
+    if(selectedScope==="group"&&selectedGroupId){const g=groups.find(x=>x.id===selectedGroupId);if(!g)continue;groupId=selectedGroupId;ownerId=g.owner_id||u.id;}
+    const scopeRow=(ir.data||[]).find(x=>x.area===area);
+    if(!scopeRow){
+      const defaults=defaultCategoriesForArea(area);
+      const present=new Set(areaRows.map(x=>x.label));
+      const missing=defaults.filter(x=>!present.has(x));
+      if(missing.length){const payload=missing.map((label,i)=>({user_id:selectedScope==="private"?u.id:ownerId,share_group_id:groupId,area,label,sort_order:areaRows.length+i}));const ins=await db.from("space_categories").insert(payload);if(ins.error){console.error(ins.error);continue}areaRows=areaRows.concat(payload)}
+      const marker={user_id:selectedScope==="private"?u.id:ownerId,share_group_id:groupId,area,defaults_migrated:true,defaults_restored_v27:true};
+      const mi=await db.from("space_category_scopes").insert(marker);if(mi.error){console.error(mi.error)}
+    } else if(scopeRow.defaults_restored_v27!==true){
+      // v27 one-time repair: restore any original built-in categories that
+      // disappeared in v25/v26. After this repair, built-ins are ordinary
+      // user-managed categories and can be deleted/reordered permanently.
+      const defaults=defaultCategoriesForArea(area);
+      const present=new Set(areaRows.map(x=>x.label));
+      const missing=defaults.filter(x=>!present.has(x));
+      if(missing.length){
+        const payload=missing.map((label,i)=>({user_id:selectedScope==="private"?u.id:ownerId,share_group_id:groupId,area,label,sort_order:areaRows.length+i}));
+        const ins=await db.from("space_categories").insert(payload);
+        if(ins.error){console.error(ins.error);continue}
+        areaRows=areaRows.concat(payload);
+      }
+      // Put the restored built-ins back in their original order, followed by
+      // any user-created categories that already existed.
+      const byLabel=new Map(areaRows.map(x=>[x.label,x]));
+      const desired=[...defaults.filter(x=>byLabel.has(x)),...areaRows.filter(x=>!defaults.includes(x.label)).sort((a,b)=>a.sort_order-b.sort_order).map(x=>x.label)];
+      const normalized=desired.map(x=>typeof x==="string"?byLabel.get(x):x);
+      for(let i=0;i<normalized.length;i++){const row=normalized[i];let uq=db.from("space_categories").update({sort_order:i}).eq("id",row.id);const ur=await uq;if(ur.error){console.error(ur.error);break}}
+      areaRows=normalized;
+      let mq=db.from("space_category_scopes").update({defaults_migrated:true,defaults_restored_v27:true}).eq("area",area);
+      if(selectedScope==="group"&&selectedGroupId)mq=mq.eq("share_group_id",selectedGroupId);else mq=mq.eq("user_id",u.id).is("share_group_id",null);
+      const mr=await mq;if(mr.error)console.error(mr.error);
+    }
+    customCats[scopeKey][area]=areaRows.sort((a,b)=>a.sort_order-b.sort_order).map(x=>x.label);
+  }
+}
+async function addCustomCategory(){
+  const label=prompt("新增分類名稱");if(label===null)return;
+  const clean=label.trim().slice(0,30);if(!clean)return;
+  if(allCategories().includes(clean)){alert("這個分類已經存在。");return}
+  const {data:uData}=await db.auth.getUser(),u=uData.user;if(!u)return;
+  let ownerId=u.id,groupId=null;
+  if(selectedScope==="group"&&selectedGroupId){const g=groups.find(x=>x.id===selectedGroupId);if(!g){alert("找不到群組");return}groupId=selectedGroupId;ownerId=g.owner_id||u.id;}
+  const r=await db.from("space_categories").insert({user_id:selectedScope==="private"?u.id:ownerId,share_group_id:groupId,area:catArea(),label:clean,sort_order:allCategories().length}).select().single();
+  if(r.error){alert(r.error.message);return} await loadCategories();cat=clean;renderCats();load();
+}
+async function removeCustomCategory(label){
+  if(!await askConfirm(`確定要刪除「${label}」嗎？\n\n這個分類會從選單移除，已存在的資料不會被刪除。`))return;
+  let q=db.from("space_categories").delete().eq("area",catArea()).eq("label",label);
+  if(selectedScope==="group"&&selectedGroupId)q=q.eq("share_group_id",selectedGroupId);else{const {data:uData}=await db.auth.getUser();q=q.eq("user_id",uData.user.id).is("share_group_id",null)}
+  const r=await q;if(r.error){alert(r.error.message);return} await loadCategories();cat=allCategories()[0]||"";renderCats();load();
+}
+async function reorderCustomCategories(labels){
+  const {data:uData}=await db.auth.getUser(),u=uData.user;if(!u)return;
+  for(let i=0;i<labels.length;i++){let q=db.from("space_categories").update({sort_order:i}).eq("area",catArea()).eq("label",labels[i]);if(selectedScope==="group"&&selectedGroupId)q=q.eq("share_group_id",selectedGroupId);else q=q.eq("user_id",u.id).is("share_group_id",null);const r=await q;if(r.error){alert(r.error.message);return}}
+  await loadCategories();renderCats();
+}
+function enableCategoryDrag(){
+  const wrap=$("#cats");if(!wrap)return;
+  $$(".cat-wrap",wrap).forEach(w=>{w.draggable=true;w.ondragstart=e=>{e.dataTransfer.setData("text/plain",w.querySelector("[data-cat]").dataset.cat);w.classList.add("dragging")};w.ondragend=()=>w.classList.remove("dragging");w.ondragover=e=>e.preventDefault();w.ondrop=e=>{e.preventDefault();const from=e.dataTransfer.getData("text/plain"),to=w.querySelector("[data-cat]")?.dataset.cat;if(!from||!to||from===to)return;const arr=[...allCategories()],a=arr.indexOf(from),b=arr.indexOf(to);if(a<0||b<0)return;arr.splice(a,1);arr.splice(b,0,from);reorderCustomCategories(arr)};});
+}
 async function load(){
   const table=view==="todo"?"todos":view==="memo"?"memos":view;
   const {data:uData}=await db.auth.getUser(),u=uData.user;
   if(!u)return;
   await loadGroups();
+  await loadCategories();
+  if(!allCategories().includes(cat))cat=allCategories()[0]||"";
+  renderCats();
   let q;
   if(view==="memo"||view==="todo") {
     if(selectedScope==="group" && selectedGroupId){
@@ -66,10 +150,16 @@ async function load(){
     }else{
       q=db.from(table).select("*").eq("user_id",u.id).is("share_group_id",null);
     }
-    if(view!=="memo")q=q.eq(filterColumn(),cat);
+    if(view!=="memo" && cat)q=q.eq(filterColumn(),cat);
+    if(view==="memo" && cat && cat!=="全部")q=q.eq("category",cat);
   } else {
-    q=db.from(table).select("*").eq("user_id",u.id);
-    if(view!=="memo")q=q.eq(filterColumn(),cat);
+    if(selectedScope==="group" && selectedGroupId){
+      q=db.from(table).select("*").eq("share_group_id",selectedGroupId);
+    }else{
+      q=db.from(table).select("*").eq("user_id",u.id).is("share_group_id",null);
+    }
+    if(view!=="memo" && cat)q=q.eq(filterColumn(),cat);
+    if(view==="memo" && cat && cat!=="全部")q=q.eq("category",cat);
   }
   const r=await q.order("created_at",{ascending:false});
   if(r.error){console.error(r.error);$("#cards").innerHTML=`<p class="meta">${esc(r.error.message)}</p>`;return}
@@ -140,7 +230,7 @@ function tableHtml(raw){
 }
 
 async function remove(id){
-  if(!confirm("確定要刪除嗎？"))return;
+  if(!await askConfirm("確定要刪除這筆內容嗎？"))return;
   const {data:uData}=await db.auth.getUser(),u=uData.user;if(!u){alert("請先登入");return}
   const table=view==="todo"?"todos":view==="memo"?"memos":view;
   let r=db.from(table).delete().eq("id",id);
@@ -155,7 +245,7 @@ async function remove(id){
 }
 
 async function removeAttachment(id,path){
-  if(!confirm("要刪除這張附件嗎？"))return;
+  if(!await askConfirm("確定要刪除這張照片嗎？"))return;
   const {data:uData}=await db.auth.getUser(),u=uData.user;if(!u)return;
   const a=await db.storage.from(ATTACH_BUCKET).remove([path]);
   if(a.error){alert(a.error.message);return}
@@ -168,6 +258,43 @@ async function removeAttachment(id,path){
 const field=(l,x)=>`<label>${l}${x}</label>`;
 function shareField(r={}){return ""}
 
+function areaTitle(v){
+  const base=v==="todo"?"生活管理":v==="food"?"食物":v==="wishlist"?"購物":v==="watchlist"?"影劇":"備忘錄";
+  if(selectedScope==="group"&&selectedGroupId){return `${base} · ${groups.find(g=>g.id===selectedGroupId)?.name||"群組"}`}
+  return `${base} · 個人`;
+}
+
+function starKey(){return `my-little-space-starred-groups-${db?.auth?"user":""}`;}
+async function loadStarredGroups(){
+  const {data}=await db.auth.getUser();
+  const id=data?.user?.id;
+  if(!id){starredGroups=[];return;}
+  try{starredGroups=JSON.parse(localStorage.getItem(`my-little-space-starred-groups-${id}`)||"[]").filter(Boolean)}catch{starredGroups=[]}
+}
+async function toggleStarGroup(id){
+  const {data}=await db.auth.getUser();
+  const uid=data?.user?.id;if(!uid)return;
+  starredGroups=starredGroups.includes(id)?starredGroups.filter(x=>x!==id):[...starredGroups,id];
+  localStorage.setItem(`my-little-space-starred-groups-${uid}`,JSON.stringify(starredGroups));
+  renderScopePicker();
+}
+function renderScopePicker(){
+  const el=$("#scopePicker");if(!el)return;
+  const current=selectedScope==="group"&&selectedGroupId?groups.find(g=>g.id===selectedGroupId):null;
+  const sorted=sortedGroupsList();
+  el.innerHTML=`<button type="button" class="scope-current"><span>${current?"👥":"👤"} ${esc(current?.name||"個人")}</span><span class="scope-chevron">⌄</span></button><div class="scope-menu hidden"><button type="button" class="scope-option ${!current?"active":""}" data-scope="private"><span>👤 個人</span></button>${sorted.map(g=>`<div class="scope-option-wrap"><button type="button" class="scope-option ${current?.id===g.id?"active":""}" data-scope="group:${esc(g.id)}"><span>${starredGroups.includes(g.id)?"⭐":"👥"} ${esc(g.name)}</span></button><button type="button" class="scope-star ${starredGroups.includes(g.id)?"starred":""}" data-star-id="${esc(g.id)}" title="${starredGroups.includes(g.id)?"取消標記":"標記"}">${starredGroups.includes(g.id)?"★":"☆"}</button></div>`).join("")}</div>`;
+  $(".scope-current",el).onclick=()=>$(".scope-menu",el).classList.toggle("hidden");
+  $$(".scope-option",el).forEach(b=>b.onclick=()=>selectScope(b.dataset.scope));
+  $$(".scope-star",el).forEach(b=>b.onclick=e=>{e.stopPropagation();toggleStarGroup(b.dataset.starId)});
+  $("#groupManage").onclick=shareManager;
+}
+function selectScope(value){
+  if(value==="private"){selectedScope="private";selectedGroupId=null;}
+  else{selectedScope="group";selectedGroupId=value.slice(6);}
+  renderScopePicker();
+  const menu=$(".scope-menu");if(menu)menu.classList.add("hidden");
+  if(view!=="home"){$("#title").textContent=areaTitle(view);load();}
+}
 
 function attachmentField(){
   return `<div class="attachment-field"><label>📎 圖片附件</label><button type="button" id="allowImages" class="consent-btn">先同意使用圖片，再選擇圖片</button><input id="imageFiles" name="imageFiles" type="file" accept="image/*" multiple hidden><small>你可以一次選擇多張圖片。網站不會自動讀取你的整個相簿，只有你在系統選擇並確認的圖片才會被上傳。</small></div>`
@@ -175,18 +302,18 @@ function attachmentField(){
 
 function fields(t,r={}){
   const end=`<div class="actions2"><button type="button" class="cancel" id="cancel">取消</button><button class="save">儲存</button></div>`;
-  if(t==="food")return field("店家名稱",`<input name="name" required value="${esc(r.name)}">`)+field("分類",`<select name="category">${cats.food.map(x=>`<option ${x===(r.category||cat)?"selected":""}>${x}</option>`).join("")}</select>`)+field("捷運站",`<input name="mrt" value="${esc(r.mrt)}">`)+field("幾號出口",`<input name="exit" value="${esc(r.exit)}">`)+field("走幾分鐘",`<input name="walk_minutes" type="number" min="0" value="${r.walk_minutes??""}">`)+field("Google Maps",`<input name="maps_url" type="url" value="${esc(r.maps_url)}">`)+field("備註",`<textarea name="note">${esc(r.note)}</textarea>`)+attachmentField()+end;
-  if(t==="wishlist")return field("商品名稱",`<input name="name" required value="${esc(r.name)}">`)+field("地區",`<select name="country">${cats.wishlist.map(x=>`<option ${x===(r.country||cat)?"selected":""}>${x}</option>`).join("")}</select>`)+field("購買地點",`<input name="purchase_place" value="${esc(r.purchase_place)}">`)+field("備註",`<textarea name="note">${esc(r.note)}</textarea>`)+attachmentField()+end;
-  if(t==="watchlist")return field("劇名／電影名",`<input name="name" required value="${esc(r.name)}">`)+field("分類",`<select name="category">${cats.watchlist.map(x=>`<option ${x===(r.category||cat)?"selected":""}>${x}</option>`).join("")}</select>`)+attachmentField()+end;
+  if(t==="food")return field("店家名稱",`<input name="name" required value="${esc(r.name)}">`)+field("分類",`<select name="category">${allCategories().filter(x=>x!=="全部").map(x=>`<option ${x===(r.category||cat)?"selected":""}>${x}</option>`).join("")}</select>`)+field("捷運站",`<input name="mrt" value="${esc(r.mrt)}">`)+field("幾號出口",`<input name="exit" value="${esc(r.exit)}">`)+field("走幾分鐘",`<input name="walk_minutes" type="number" min="0" value="${r.walk_minutes??""}">`)+field("Google Maps",`<input name="maps_url" type="url" value="${esc(r.maps_url)}">`)+field("備註",`<textarea name="note">${esc(r.note)}</textarea>`)+attachmentField()+end;
+  if(t==="wishlist")return field("商品名稱",`<input name="name" required value="${esc(r.name)}">`)+field("地區",`<select name="country">${allCategories().filter(x=>x!=="全部").map(x=>`<option ${x===(r.country||cat)?"selected":""}>${x}</option>`).join("")}</select>`)+field("購買地點",`<input name="purchase_place" value="${esc(r.purchase_place)}">`)+field("備註",`<textarea name="note">${esc(r.note)}</textarea>`)+attachmentField()+end;
+  if(t==="watchlist")return field("劇名／電影名",`<input name="name" required value="${esc(r.name)}">`)+field("分類",`<select name="category">${allCategories().filter(x=>x!=="全部").map(x=>`<option ${x===(r.category||cat)?"selected":""}>${x}</option>`).join("")}</select>`)+attachmentField()+end;
   if(t==="memo"){
-    return shareField(r)+field("標題",`<input name="title" value="${esc(r.title)}">`)
+    return shareField(r)+field("分類",`<select name="category">${allCategories().map(x=>`<option ${x===(r.category||cat||"全部")?"selected":""}>${x}</option>`).join("")}</select>`)+field("標題",`<input name="title" value="${esc(r.title)}">`)
       +field("內容",`<textarea name="content" class="memo-editor" placeholder="想記住什麼，就寫在這裡 ♡">${esc(r.content)}</textarea>`)
       +field("其他網址",`<textarea name="urls" placeholder="一行一個網址">${esc(r.urls)}</textarea>`)
       +tableEditor(r.table_data)
       +attachmentField()+end;
   }
   const start=r.start_date||r.event_date||"",endDate=r.end_date||"";
-  return shareField(r)+field("類型",`<select name="event_type" id="todoType"><option ${((r.event_type||cat)==="提醒事項")?"selected":""}>提醒事項</option><option ${((r.event_type||cat)==="行程")?"selected":""}>行程</option></select>`)
+  return shareField(r)+field("類型",`<select name="event_type" id="todoType">${allCategories().map(x=>`<option ${x===(r.event_type||cat)?"selected":""}>${x}</option>`).join("")}</select>`)
     +field("名稱",`<input name="title" required value="${esc(r.title)}">`)
     +field("開始日期",`<input name="start_date" type="date" value="${esc(start)}">`)
     +field("結束日期",`<input name="end_date" type="date" value="${esc(endDate)}">`)
@@ -224,9 +351,9 @@ function wireTable(){
   };
   const refresh=()=>{const data=readGrid();draw(data)};
   $("#addCol").onclick=()=>{const d=readGrid();d.forEach(r=>r.push(""));draw(d)};
-  $("#delCol").onclick=()=>{const d=readGrid();if(d[0].length<=1)return;d.forEach(r=>r.pop());draw(d)};
+  $("#delCol").onclick=async()=>{if(!await askConfirm("確定要刪除這一欄嗎？刪除後這一欄的內容會一起移除。"))return;const d=readGrid();if(d[0].length<=1)return;d.forEach(r=>r.pop());draw(d)};
   $("#addRow").onclick=()=>{const d=readGrid();d.push(Array(d[0].length).fill(""));draw(d)};
-  $("#delRow").onclick=()=>{const d=readGrid();if(d.length<=1)return;d.pop();draw(d)};
+  $("#delRow").onclick=async()=>{if(!await askConfirm("確定要刪除這一列嗎？刪除後這一列的內容會一起移除。"))return;const d=readGrid();if(d.length<=1)return;d.pop();draw(d)};
   refresh();
 }
 
@@ -253,28 +380,39 @@ function chooser(){
   $("#fmsg").textContent="";
   $("#modal").classList.remove("hidden");
   $("#mtitle").textContent="想新增什麼？";
-  $("#form").innerHTML=`<div class="tiles"><button type="button" class="tile pink" data-new="food">🍽️ 食物</button><button type="button" class="tile purple" data-new="wishlist">🛍️ 想買</button><button type="button" class="tile blue" data-new="watchlist">🎬 影劇</button><button type="button" class="tile green" data-new="todo">🧩 生活管理</button><button type="button" class="tile memo-tile" data-new="memo">📝 備忘錄</button></div>`;
+  $("#form").innerHTML=`<div class="tiles"><button type="button" class="tile pink" data-new="food">🍽️ 食物</button><button type="button" class="tile purple" data-new="wishlist">🛍️ 購物</button><button type="button" class="tile blue" data-new="watchlist">🎬 影劇</button><button type="button" class="tile green" data-new="todo">🧩 生活管理</button><button type="button" class="tile memo-tile" data-new="memo">📝 備忘錄</button></div>`;
   $$('[data-new]').forEach(b=>b.onclick=()=>openForm(b.dataset.new))
 }
 function close(){$("#modal").classList.add("hidden");editing=null}
+function askConfirm(message,yesText="是",noText="否"){return new Promise(resolve=>{const m=$("#confirmModal");if(!m){resolve(false);return}$("#confirmText").textContent=message;$("#confirmYes").textContent=yesText;$("#confirmNo").textContent=noText;m.classList.remove("hidden");const done=v=>{m.classList.add("hidden");$("#confirmYes").onclick=null;$("#confirmNo").onclick=null;resolve(v)};$("#confirmYes").onclick=()=>done(true);$("#confirmNo").onclick=()=>done(false)})}
 
 async function loadGroups(){
   const {data:uData}=await db.auth.getUser(),u=uData.user;if(!u)return;
-  const r=await db.from("share_group_members").select("group_id, share_groups(id,name)").eq("user_id",u.id);
+  currentUserId=u.id;
+  await loadStarredGroups();
+  const r=await db.from("share_group_members").select("group_id, share_groups(id,name,owner_id)").eq("user_id",u.id);
   groups=(r.error?[]:(r.data||[]).map(x=>x.share_groups).filter(Boolean));
+  starredGroups=starredGroups.filter(id=>groups.some(g=>g.id===id));
 }
+function groupOrderKey(){return `my-little-space-group-order-${currentUserId||""}`}
+function loadGroupOrder(){try{groupOrder=JSON.parse(localStorage.getItem(groupOrderKey())||"[]").filter(Boolean)}catch{groupOrder=[]}}
+function saveGroupOrder(){localStorage.setItem(groupOrderKey(),JSON.stringify(groupOrder))}
+function sortedGroupsList(){loadGroupOrder();return [...groups].sort((a,b)=>{const sa=starredGroups.includes(a.id)?0:1,sb=starredGroups.includes(b.id)?0:1;if(sa!==sb)return sa-sb;const ia=groupOrder.indexOf(a.id),ib=groupOrder.indexOf(b.id);if(ia<0&&ib<0)return a.name.localeCompare(b.name,"zh-Hant");if(ia<0)return 1;if(ib<0)return -1;return ia-ib})}
+async function leaveGroup(id){if(!await askConfirm("確定要退出這個群組嗎？退出後你將無法再看到群組內容，之後可以用群組名稱與密碼重新加入。"))return;const r=await db.rpc("leave_share_group",{p_group_id:id});if(r.error){alert(r.error.message);return}groups=groups.filter(g=>g.id!==id);starredGroups=starredGroups.filter(x=>x!==id);groupOrder=groupOrder.filter(x=>x!==id);saveGroupOrder();if(selectedGroupId===id){selectedScope="private";selectedGroupId=null;}renderScopePicker();await shareManager()}
 async function shareManager(){
   await loadGroups();
+  loadGroupOrder();
   $("#modal").classList.remove("hidden");
-  $("#mtitle").textContent="👥 共用備忘錄／生活管理";
-  const groupHtml=groups.length
-    ? groups.map(g=>`<div class="group-entry"><span>👥 ${esc(g.name)}</span><button type="button" class="mini enter-group" data-group-id="${esc(g.id)}">進入</button></div>`).join("")
+  $("#mtitle").textContent="👥 群組空間管理";
+  const sortedGroups=sortedGroupsList();
+  const groupHtml=sortedGroups.length
+    ? sortedGroups.map(g=>`<div class="group-entry ${starredGroups.includes(g.id)?"is-starred":""}" draggable="true" data-group-drag="${esc(g.id)}"><span>${starredGroups.includes(g.id)?"⭐":"👥"} ${esc(g.name)}</span><div class="group-entry-actions"><button type="button" class="mini star-group ${starredGroups.includes(g.id)?"starred":""}" data-star-id="${esc(g.id)}">${starredGroups.includes(g.id)?"★":"☆"}</button><button type="button" class="mini enter-group" data-group-id="${esc(g.id)}">進入</button><button type="button" class="mini leave-group" data-group-id="${esc(g.id)}">退出</button></div></div>`).join("")
     : `<div class="meta">目前還沒有共用群組。</div>`;
   $("#form").innerHTML=`
     <div class="share-panel">
       <div class="share-card">
         <b>建立共用群組</b>
-        <p class="scope-note">例如「室友」「旅行」「家人」。建立後可以把備忘錄或生活管理內容放進這個群組。</p>
+        <p class="scope-note">建立後，這個群組可以共用食物、購物、影劇、生活管理與備忘錄。</p>
         <input id="newGroupName" placeholder="群組名稱">
         <input id="newGroupPass" type="text" placeholder="密碼" autocomplete="off">
         <div class="share-actions"><button type="button" class="primary" id="createGroup">建立群組</button></div>
@@ -286,25 +424,17 @@ async function shareManager(){
         <input id="joinGroupPass" type="text" placeholder="密碼" autocomplete="off">
         <div class="share-actions"><button type="button" class="primary" id="joinGroup">加入群組</button></div>
       </div>
-      <div class="share-card"><b>我目前的群組</b><div id="groupList">${groupHtml}</div></div>
+      <div class="share-card"><b>我目前的群組</b><div id="groupList">${groupHtml}</div><small class="scope-note">拖曳群組可以調整順序。</small></div>
       <div class="actions2"><button type="button" class="cancel" id="cancel">關閉</button></div>
     </div>`;
   $("#cancel").onclick=close;
-  $$(".enter-group").forEach(b=>b.onclick=()=>{selectedScope="group";selectedGroupId=b.dataset.groupId;close();$("#title").textContent=(view==="todo"?"生活管理":view==="memo"?"備忘錄":"")+" · "+(groups.find(g=>g.id===selectedGroupId)?.name||"群組");renderCats();load();});
-  $("#createGroup").onclick=async()=>{
-    const name=$("#newGroupName").value.trim(),pass=$("#newGroupPass").value;
-    if(!name||!pass){alert("請輸入群組名稱與密碼");return}
-    const r=await db.rpc("create_share_group",{p_name:name,p_passcode:pass});
-    if(r.error){alert(r.error.message);return}
-    await loadGroups();alert("群組建立好了！");await shareManager();
-  };
-  $("#joinGroup").onclick=async()=>{
-    const name=$("#joinGroupName").value.trim(),pass=$("#joinGroupPass").value;
-    if(!name||!pass){alert("請輸入群組名稱與密碼");return}
-    const r=await db.rpc("join_share_group",{p_name:name,p_passcode:pass});
-    if(r.error){alert(r.error.message);return}
-    await loadGroups();alert("已加入群組！");await shareManager();
-  };
+  $$(".star-group").forEach(b=>b.onclick=async()=>{await toggleStarGroup(b.dataset.starId);await shareManager();});
+  $$(".enter-group").forEach(b=>b.onclick=()=>{selectedScope="group";selectedGroupId=b.dataset.groupId;close();renderScopePicker();if(view!=="home"){$("#title").textContent=areaTitle(view);renderCats();load();}});
+  $$(".leave-group").forEach(b=>b.onclick=()=>leaveGroup(b.dataset.groupId));
+  let dragId=null;
+  $$('[data-group-drag]').forEach(el=>{el.ondragstart=e=>{dragId=el.dataset.groupDrag;el.classList.add("dragging")};el.ondragend=()=>el.classList.remove("dragging");el.ondragover=e=>e.preventDefault();el.ondrop=e=>{e.preventDefault();const to=el.dataset.groupDrag;if(!dragId||dragId===to)return;const arr=sortedGroupsList().map(g=>g.id),a=arr.indexOf(dragId),b=arr.indexOf(to);arr.splice(a,1);arr.splice(b,0,dragId);groupOrder=arr;saveGroupOrder();shareManager();}});
+  $("#createGroup").onclick=async()=>{const name=$("#newGroupName").value.trim(),pass=$("#newGroupPass").value;if(!name||!pass){alert("請輸入群組名稱與密碼");return}const r=await db.rpc("create_share_group",{p_name:name,p_passcode:pass});if(r.error){alert(r.error.message);return}await loadGroups();renderScopePicker();alert("群組建立好了！");await shareManager();};
+  $("#joinGroup").onclick=async()=>{const name=$("#joinGroupName").value.trim(),pass=$("#joinGroupPass").value;if(!name||!pass){alert("請輸入群組名稱與密碼");return}const r=await db.rpc("join_share_group",{p_name:name,p_passcode:pass});if(r.error){alert(r.error.message);return}await loadGroups();renderScopePicker();alert("已加入群組！");await shareManager();};
 }
 $("#share").onclick=shareManager;
 
@@ -334,7 +464,7 @@ async function save(e,t){
   if(!u){$("#fmsg").textContent="登入狀態已失效，請重新登入。";return}
   delete v.imageFiles;
   delete v.share_group_id;
-  v.share_group_id=(view==="memo"||view==="todo") && selectedScope==="group" ? selectedGroupId : null;
+  v.share_group_id=selectedScope==="group" ? selectedGroupId : null;
   if(t==="food"&&v.walk_minutes==="")v.walk_minutes=null;
   if(t==="todo"){
     if(!v.start_date)v.start_date=null;
@@ -344,6 +474,7 @@ async function save(e,t){
     v.done=editing?.done??false;
   }
   if(t==="memo"){
+    if(v.category==="全部")v.category=null;
     v.table_data=JSON.stringify(readTable());
     if(v.table_data==="null")v.table_data=null;
   }
@@ -387,4 +518,4 @@ $("#editName").onclick=editUserName;
 db.auth.getSession().then(({data})=>data.session?showApp():showAuth());
 db.auth.onAuthStateChange((_e,s)=>s?showApp():showAuth());
 function showAuth(){$("#auth").classList.remove("hidden");$("#app").classList.add("hidden")}
-function showApp(){$("#auth").classList.add("hidden");$("#app").classList.remove("hidden");loadUserName();home()}
+async function showApp(){$("#auth").classList.add("hidden");$("#app").classList.remove("hidden");loadUserName();await loadGroups();home()}

@@ -74,10 +74,22 @@ create table if not exists public.share_group_members (
   primary key(group_id,user_id)
 );
 
+alter table public.food add column if not exists share_group_id uuid;
+alter table public.wishlist add column if not exists share_group_id uuid;
+alter table public.watchlist add column if not exists share_group_id uuid;
 alter table public.todos add column if not exists share_group_id uuid;
 alter table public.memos add column if not exists share_group_id uuid;
 
 do $$ begin
+  if not exists (select 1 from pg_constraint where conname='food_share_group_fk') then
+    alter table public.food add constraint food_share_group_fk foreign key (share_group_id) references public.share_groups(id) on delete set null;
+  end if;
+  if not exists (select 1 from pg_constraint where conname='wishlist_share_group_fk') then
+    alter table public.wishlist add constraint wishlist_share_group_fk foreign key (share_group_id) references public.share_groups(id) on delete set null;
+  end if;
+  if not exists (select 1 from pg_constraint where conname='watchlist_share_group_fk') then
+    alter table public.watchlist add constraint watchlist_share_group_fk foreign key (share_group_id) references public.share_groups(id) on delete set null;
+  end if;
   if not exists (select 1 from pg_constraint where conname='todos_share_group_fk') then
     alter table public.todos add constraint todos_share_group_fk foreign key (share_group_id) references public.share_groups(id) on delete set null;
   end if;
@@ -235,21 +247,24 @@ begin
 end $$;
 
 create policy food_own on public.food for all to authenticated
-using (auth.uid()=user_id) with check (auth.uid()=user_id);
+using (auth.uid()=user_id or public.is_share_group_member(food.share_group_id))
+with check ((share_group_id is null and user_id=auth.uid()) or (share_group_id is not null and public.is_share_group_member(share_group_id)));
 
 create policy wishlist_own on public.wishlist for all to authenticated
-using (auth.uid()=user_id) with check (auth.uid()=user_id);
+using (auth.uid()=user_id or public.is_share_group_member(wishlist.share_group_id))
+with check ((share_group_id is null and user_id=auth.uid()) or (share_group_id is not null and public.is_share_group_member(share_group_id)));
 
 create policy watchlist_own on public.watchlist for all to authenticated
-using (auth.uid()=user_id) with check (auth.uid()=user_id);
+using (auth.uid()=user_id or public.is_share_group_member(watchlist.share_group_id))
+with check ((share_group_id is null and user_id=auth.uid()) or (share_group_id is not null and public.is_share_group_member(share_group_id)));
 
 create policy todos_own on public.todos for all to authenticated
 using (auth.uid()=user_id or public.is_share_group_member(todos.share_group_id))
-with check ((user_id=auth.uid() or public.is_share_group_member(todos.share_group_id)) and (share_group_id is null or public.is_share_group_member(todos.share_group_id)));
+with check ((share_group_id is null and user_id=auth.uid()) or (share_group_id is not null and public.is_share_group_member(share_group_id)));
 
 create policy memos_own on public.memos for all to authenticated
 using (auth.uid()=user_id or public.is_share_group_member(memos.share_group_id))
-with check ((user_id=auth.uid() or public.is_share_group_member(memos.share_group_id)) and (share_group_id is null or public.is_share_group_member(memos.share_group_id)));
+with check ((share_group_id is null and user_id=auth.uid()) or (share_group_id is not null and public.is_share_group_member(share_group_id)));
 
 create policy share_groups_select on public.share_groups for select to authenticated
 using (public.is_share_group_member(share_groups.id) or owner_id=auth.uid());
@@ -258,7 +273,12 @@ create policy share_group_members_select on public.share_group_members for selec
 using (user_id=auth.uid() or public.is_share_group_member(group_id));
 
 create policy attachments_own on public.attachments for all to authenticated
-using (auth.uid()=user_id or exists (select 1 from public.todos t where t.id::text=attachments.item_id and attachments.item_type='todo' and public.is_share_group_member(t.share_group_id)) or exists (select 1 from public.memos m where m.id::text=attachments.item_id and attachments.item_type='memo' and public.is_share_group_member(m.share_group_id)))
+using (auth.uid()=user_id
+  or exists (select 1 from public.food f where f.id::text=attachments.item_id and attachments.item_type='food' and public.is_share_group_member(f.share_group_id))
+  or exists (select 1 from public.wishlist w where w.id::text=attachments.item_id and attachments.item_type='wishlist' and public.is_share_group_member(w.share_group_id))
+  or exists (select 1 from public.watchlist w where w.id::text=attachments.item_id and attachments.item_type='watchlist' and public.is_share_group_member(w.share_group_id))
+  or exists (select 1 from public.todos t where t.id::text=attachments.item_id and attachments.item_type='todo' and public.is_share_group_member(t.share_group_id))
+  or exists (select 1 from public.memos m where m.id::text=attachments.item_id and attachments.item_type='memo' and public.is_share_group_member(m.share_group_id)))
 with check (auth.uid()=user_id);
 
 -- Image storage bucket. The bucket is public so image previews can use stable URLs.
@@ -290,31 +310,126 @@ using (
       where a.storage_path=name
         and (
           a.user_id=auth.uid()
-          or exists (
-            select 1 from public.todos t
-            where a.item_type='todo'
-              and t.id::text=a.item_id
-              and public.is_share_group_member(t.share_group_id)
-          )
-          or exists (
-            select 1 from public.memos m
-            where a.item_type='memo'
-              and m.id::text=a.item_id
-              and public.is_share_group_member(m.share_group_id)
-          )
+          or exists (select 1 from public.food f where a.item_type='food' and f.id::text=a.item_id and public.is_share_group_member(f.share_group_id))
+          or exists (select 1 from public.wishlist w where a.item_type='wishlist' and w.id::text=a.item_id and public.is_share_group_member(w.share_group_id))
+          or exists (select 1 from public.watchlist w where a.item_type='watchlist' and w.id::text=a.item_id and public.is_share_group_member(w.share_group_id))
+          or exists (select 1 from public.todos t where a.item_type='todo' and t.id::text=a.item_id and public.is_share_group_member(t.share_group_id))
+          or exists (select 1 from public.memos m where a.item_type='memo' and m.id::text=a.item_id and public.is_share_group_member(m.share_group_id))
         )
     )
   )
 );
 
 create index if not exists food_user_created_idx on public.food(user_id,created_at desc);
+create index if not exists food_share_group_idx on public.food(share_group_id);
 create index if not exists wishlist_user_created_idx on public.wishlist(user_id,created_at desc);
+create index if not exists wishlist_share_group_idx on public.wishlist(share_group_id);
 create index if not exists watchlist_user_created_idx on public.watchlist(user_id,created_at desc);
+create index if not exists watchlist_share_group_idx on public.watchlist(share_group_id);
 create index if not exists todos_user_created_idx on public.todos(user_id,created_at desc);
 create index if not exists memos_user_created_idx on public.memos(user_id,created_at desc);
 create index if not exists attachments_item_idx on public.attachments(user_id,item_type,item_id);
 create index if not exists todos_share_group_idx on public.todos(share_group_id);
 create index if not exists memos_share_group_idx on public.memos(share_group_id);
 create index if not exists share_group_members_user_idx on public.share_group_members(user_id);
+
+notify pgrst,'reload schema';
+
+-- v24: custom categories for every area + leaving groups.
+alter table public.memos add column if not exists category text;
+
+create table if not exists public.space_categories (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  share_group_id uuid references public.share_groups(id) on delete cascade,
+  area text not null,
+  label text not null,
+  sort_order integer not null default 0,
+  created_at timestamptz default now()
+);
+
+create unique index if not exists space_categories_private_unique
+  on public.space_categories(user_id,area,label)
+  where share_group_id is null;
+create unique index if not exists space_categories_group_unique
+  on public.space_categories(share_group_id,area,label)
+  where share_group_id is not null;
+create index if not exists space_categories_private_idx
+  on public.space_categories(user_id,area,sort_order);
+create index if not exists space_categories_group_idx
+  on public.space_categories(share_group_id,area,sort_order);
+
+alter table public.space_categories enable row level security;
+drop policy if exists space_categories_all on public.space_categories;
+create policy space_categories_all on public.space_categories for all to authenticated
+using (
+  (share_group_id is null and user_id=auth.uid())
+  or (share_group_id is not null and public.is_share_group_member(share_group_id))
+)
+with check (
+  (share_group_id is null and user_id=auth.uid())
+  or (share_group_id is not null and public.is_share_group_member(share_group_id))
+);
+
+create or replace function public.leave_share_group(p_group_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then raise exception '請先登入'; end if;
+  delete from public.share_group_members
+  where group_id=p_group_id and user_id=auth.uid();
+end;
+$$;
+revoke execute on function public.leave_share_group(uuid) from public;
+grant execute on function public.leave_share_group(uuid) to authenticated;
+
+-- Existing memo rows remain visible under 「全部」; new memo rows can use custom categories.
+
+-- v25: remember whether a space has been initialized so built-in categories
+-- can be deleted permanently without being recreated on the next load.
+create table if not exists public.space_category_scopes (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  share_group_id uuid references public.share_groups(id) on delete cascade,
+  area text not null,
+  created_at timestamptz default now(),
+  constraint space_category_scope_one_owner check (
+    (share_group_id is null and user_id is not null) or share_group_id is not null
+  )
+);
+create unique index if not exists space_category_scopes_private_unique
+  on public.space_category_scopes(user_id,area)
+  where share_group_id is null;
+create unique index if not exists space_category_scopes_group_unique
+  on public.space_category_scopes(share_group_id,area)
+  where share_group_id is not null;
+create index if not exists space_category_scopes_private_idx
+  on public.space_category_scopes(user_id,area);
+create index if not exists space_category_scopes_group_idx
+  on public.space_category_scopes(share_group_id,area);
+
+
+-- v26: one-time restoration of the original built-in categories for scopes
+-- created by v25. After migration, users may freely delete/reorder them and
+-- they will not be recreated.
+alter table public.space_category_scopes
+  add column if not exists defaults_migrated boolean not null default false;
+alter table public.space_category_scopes
+  add column if not exists defaults_restored_v27 boolean not null default false;
+
+alter table public.space_category_scopes enable row level security;
+drop policy if exists space_category_scopes_all on public.space_category_scopes;
+create policy space_category_scopes_all on public.space_category_scopes for all to authenticated
+using (
+  (share_group_id is null and user_id=auth.uid())
+  or (share_group_id is not null and public.is_share_group_member(share_group_id))
+)
+with check (
+  (share_group_id is null and user_id=auth.uid())
+  or (share_group_id is not null and public.is_share_group_member(share_group_id))
+);
 
 notify pgrst,'reload schema';
