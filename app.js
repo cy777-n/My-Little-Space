@@ -53,6 +53,7 @@ function customCategoryList(){return customCats[categoryScopeKey()]?.[catArea()]
 function allCategories(){return customCategoryList()}
 function defaultCategoriesForArea(area){return area==="todo"?["提醒事項","行程"]:area==="memo"?[]:(cats[area]||[])}
 function renderCats(){
+  if(view==="memo"){ $("#cats").innerHTML=""; return; }
   const list=allCategories();
   $("#cats").innerHTML=list.map(c=>`<div class="cat-wrap"><button class="${c===cat?"active":""}" data-cat="${esc(c)}">${esc(c)}</button><button type="button" class="cat-remove" data-remove-cat="${esc(c)}" title="刪除分類" aria-label="刪除分類 ${esc(c)}">×</button></div>`).join("")+`<button type="button" class="cat-add" id="addCategory">＋ 類別</button>`;
   $$('[data-cat]').forEach(b=>b.onclick=()=>{cat=b.dataset.cat;renderCats();load()});
