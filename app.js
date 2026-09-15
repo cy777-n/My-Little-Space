@@ -38,7 +38,7 @@ function home(){$("#home").classList.remove("hidden");$("#list").classList.add("
 
 function openView(v){
   view=v;
-  cat=v==="todo"?"提醒事項":v==="memo"?"全部":cats[v][0];
+  cat=v==="todo"?"提醒事項":v==="memo"?null:cats[v][0];
   $("#home").classList.add("hidden");
   $("#list").classList.remove("hidden");
   $("#title").textContent=areaTitle(v);
@@ -51,10 +51,10 @@ function catColumn(){return view==="todo"?"event_type":view==="wishlist"?"countr
 function categoryScopeKey(){return selectedScope==="group"&&selectedGroupId?`group:${selectedGroupId}`:`user:${currentUserId||""}`}
 function customCategoryList(){return customCats[categoryScopeKey()]?.[catArea()]||[]}
 function allCategories(){return customCategoryList()}
-function defaultCategoriesForArea(area){return area==="todo"?["提醒事項","行程"]:area==="memo"?["全部"]:(cats[area]||[])}
+function defaultCategoriesForArea(area){return area==="todo"?["提醒事項","行程"]:area==="memo"?[]:(cats[area]||[])}
 function renderCats(){
   const list=allCategories();
-  $("#cats").innerHTML=list.map(c=>`<div class="cat-wrap"><button class="${c===cat?"active":""}" data-cat="${esc(c)}">${esc(c)}</button><button type="button" class="cat-remove" data-remove-cat="${esc(c)}" title="刪除分類">×</button></div>`).join("")+`<button type="button" class="cat-add" id="addCategory">＋ 新增</button>`;
+  $("#cats").innerHTML=list.map(c=>`<div class="cat-wrap"><button class="${c===cat?"active":""}" data-cat="${esc(c)}">${esc(c)}</button><button type="button" class="cat-remove" data-remove-cat="${esc(c)}" title="刪除分類" aria-label="刪除分類 ${esc(c)}">×</button></div>`).join("")+`<button type="button" class="cat-add" id="addCategory">＋ 類別</button>`;
   $$('[data-cat]').forEach(b=>b.onclick=()=>{cat=b.dataset.cat;renderCats();load()});
   $$('[data-remove-cat]').forEach(b=>b.onclick=()=>removeCustomCategory(b.dataset.removeCat));
   $("#addCategory").onclick=addCustomCategory;
@@ -70,7 +70,7 @@ async function loadCategories(){
   const [r,ir]=await Promise.all([q.order("sort_order",{ascending:true}),iq]);
   if(r.error){console.error(r.error);return}
   if(ir.error){console.error(ir.error);return}
-  customCats[scopeKey]={}; const existing=r.data||[], initialized=new Set((ir.data||[]).map(x=>x.area));
+  customCats[scopeKey]={}; const existing=(r.data||[]).filter(x=>!(x.area==="memo"&&x.label==="全部")), initialized=new Set((ir.data||[]).map(x=>x.area));
   for(const area of ["food","wishlist","watchlist","todo","memo"]){
     let areaRows=existing.filter(x=>x.area===area).sort((a,b)=>a.sort_order-b.sort_order);
     let ownerId=u.id,groupId=null;
@@ -306,7 +306,7 @@ function fields(t,r={}){
   if(t==="wishlist")return field("商品名稱",`<input name="name" required value="${esc(r.name)}">`)+field("地區",`<select name="country">${allCategories().filter(x=>x!=="全部").map(x=>`<option ${x===(r.country||cat)?"selected":""}>${x}</option>`).join("")}</select>`)+field("購買地點",`<input name="purchase_place" value="${esc(r.purchase_place)}">`)+field("備註",`<textarea name="note">${esc(r.note)}</textarea>`)+attachmentField()+end;
   if(t==="watchlist")return field("劇名／電影名",`<input name="name" required value="${esc(r.name)}">`)+field("分類",`<select name="category">${allCategories().filter(x=>x!=="全部").map(x=>`<option ${x===(r.category||cat)?"selected":""}>${x}</option>`).join("")}</select>`)+attachmentField()+end;
   if(t==="memo"){
-    return shareField(r)+field("分類",`<select name="category">${allCategories().map(x=>`<option ${x===(r.category||cat||"全部")?"selected":""}>${x}</option>`).join("")}</select>`)+field("標題",`<input name="title" value="${esc(r.title)}">`)
+    return shareField(r)+field("標題",`<input name="title" value="${esc(r.title)}">`)
       +field("內容",`<textarea name="content" class="memo-editor" placeholder="想記住什麼，就寫在這裡 ♡">${esc(r.content)}</textarea>`)
       +field("其他網址",`<textarea name="urls" placeholder="一行一個網址">${esc(r.urls)}</textarea>`)
       +tableEditor(r.table_data)
@@ -474,7 +474,7 @@ async function save(e,t){
     v.done=editing?.done??false;
   }
   if(t==="memo"){
-    if(v.category==="全部")v.category=null;
+    v.category=null;
     v.table_data=JSON.stringify(readTable());
     if(v.table_data==="null")v.table_data=null;
   }

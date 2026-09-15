@@ -1,4 +1,4 @@
--- My Little Space v14
+-- My Little Space v28
 -- Safe to run on the existing Supabase project.
 -- Adds the optional memo area, image attachments, URLs and tables,
 -- while keeping the existing food/wishlist/watchlist/todos data.
