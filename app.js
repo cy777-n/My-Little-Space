@@ -194,8 +194,7 @@ async function loadWishlistFolders(){
   wishlistFolders=r.data||[];
 }
 function renderWishlistFolder(f){
-  const countLabel="📁 資料夾";
-  return `<article class="card folder-card" draggable="true" data-folder-card="${esc(f.id)}"><button type="button" class="folder-open" data-open-folder="${esc(f.id)}"><span class="folder-icon">📁</span><span class="folder-name">${esc(f.name)}</span><span class="folder-sub">${countLabel}</span>${f.note?`<span class="folder-note">${esc(f.note)}</span>`:""}</button><div class="actions"><button type="button" class="folder-rename" data-rename-folder="${esc(f.id)}">✎ 編輯</button><button type="button" class="del folder-delete" data-delete-folder="${esc(f.id)}">🗑 刪除</button></div></article>`;
+  return `<article class="card folder-card" draggable="true" data-folder-card="${esc(f.id)}"><button type="button" class="folder-open" data-open-folder="${esc(f.id)}"><span class="folder-icon">📁</span><span class="folder-name">${esc(f.name)}</span>${f.note?`<span class="folder-note">${esc(f.note)}</span>`:""}</button><div class="actions"><button type="button" class="folder-rename" data-rename-folder="${esc(f.id)}">✎ 編輯</button><button type="button" class="del folder-delete" data-delete-folder="${esc(f.id)}">🗑 刪除</button></div></article>`;
 }
 async function createWishlistFolder(){
   openFolderForm();
