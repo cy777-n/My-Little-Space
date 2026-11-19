@@ -77,3 +77,5 @@ body.photo-open{overflow:hidden}
 .folder-card .actions{flex-wrap:wrap}
 #fmsg{white-space:pre-line;line-height:1.6}
 @media(max-width:700px){.box:has(.batch-photo-list){padding:20px 14px;max-height:94vh}.batch-photo-list{max-height:57vh}.batch-photo-head img{width:62px;height:62px}.folder-card .actions{justify-content:flex-end}}
+/* Drag-and-drop target feedback */
+.card.drag-over{outline:2px dashed #aa98cf;outline-offset:3px;background:linear-gradient(145deg,#faf6ff,#fff9f5)}

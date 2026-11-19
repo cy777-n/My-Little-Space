@@ -148,6 +148,7 @@ async function load(){
   if(!u)return;
   await loadGroups();
   if(requestedView!==view||requestedScope!==selectedScope||requestedGroup!==selectedGroupId)return;
+  renderScopePicker();
   await loadCategories();
   if(requestedView!==view||requestedScope!==selectedScope||requestedGroup!==selectedGroupId)return;
   if(view==="memo")cat=null;
@@ -208,10 +209,10 @@ function openFolderForm(folder=null){
   $("#mtitle").textContent=folder?"編輯資料夾":"新增資料夾";
   form.innerHTML=`<label>資料夾名稱<input name="folder_name" maxlength="40" required placeholder="請輸入資料夾名稱" value="${esc(folder?.name||"")}"></label><label>備註／地點<textarea name="folder_note" placeholder="可填寫店家地址、地點或其他提醒">${esc(folder?.note||"")}</textarea></label><div class="actions2"><button type="button" class="cancel" id="folderCancel">取消</button><button type="submit" class="save">${folder?"儲存修改":"建立資料夾"}</button></div>`;
   $("#fmsg").textContent="";$("#folderCancel").onclick=close;
-  form.onsubmit=async e=>{e.preventDefault();if(saving)return;const fd=new FormData(form),name=String(fd.get("folder_name")||"").trim().slice(0,40),note=String(fd.get("folder_note")||"").trim();if(!name){$("#fmsg").textContent="請先輸入資料夾名稱。";return}if(wishlistFolders.some(f=>f.name.toLowerCase()===name.toLowerCase()&&f.id!==folder?.id)){$("#fmsg").textContent="這個資料夾名稱已經存在。";return}saving=true;const btn=form.querySelector(".save");btn.disabled=true;btn.textContent="儲存中…";
+  form.onsubmit=async e=>{e.preventDefault();if(saving)return;const saveScope=selectedScope,saveGroupId=selectedGroupId;const fd=new FormData(form),name=String(fd.get("folder_name")||"").trim().slice(0,40),note=String(fd.get("folder_note")||"").trim();if(!name){$("#fmsg").textContent="請先輸入資料夾名稱。";return}if(wishlistFolders.some(f=>f.name.toLowerCase()===name.toLowerCase()&&f.id!==folder?.id)){$("#fmsg").textContent="這個資料夾名稱已經存在。";return}saving=true;const btn=form.querySelector(".save");btn.disabled=true;btn.textContent="儲存中…";
     let result;
-    if(folder){let q=db.from("wishlist_folders").update({name,note}).eq("id",folder.id);if(selectedScope==="private")q=q.is("share_group_id",null);else q=q.eq("share_group_id",selectedGroupId);result=await q}
-    else{const {data}=await db.auth.getUser(),u=data.user;if(!u){saving=false;btn.disabled=false;$("#fmsg").textContent="登入狀態已失效，請重新登入。";return}result=await db.from("wishlist_folders").insert({user_id:u.id,share_group_id:selectedScope==="group"?selectedGroupId:null,name,note,category:cat||"全部",area:view,sort_order:wishlistFolders.length})}
+    if(folder){let q=db.from("wishlist_folders").update({name,note}).eq("id",folder.id);if(saveScope==="private")q=q.is("share_group_id",null);else q=q.eq("share_group_id",saveGroupId);result=await q}
+    else{const {data}=await db.auth.getUser(),u=data.user;if(!u){saving=false;btn.disabled=false;$("#fmsg").textContent="登入狀態已失效，請重新登入。";return}result=await db.from("wishlist_folders").insert({user_id:u.id,share_group_id:saveScope==="group"?saveGroupId:null,name,note,category:cat||"全部",area:view,sort_order:wishlistFolders.length})}
     saving=false;if(result.error){btn.disabled=false;btn.textContent=folder?"儲存修改":"建立資料夾";$("#fmsg").textContent=`儲存失敗：${result.error.message}`;return}close();await load();
   };
 }
@@ -234,9 +235,100 @@ function wireWishlistDnD(){
   $$('[data-open-folder]').forEach(b=>b.onclick=()=>{folderViewId=b.dataset.openFolder;load()});
   $$('[data-rename-folder]').forEach(b=>b.onclick=()=>renameWishlistFolder(b.dataset.renameFolder));
   $$('[data-delete-folder]').forEach(b=>b.onclick=()=>deleteWishlistFolder(b.dataset.deleteFolder));
+
   let draggedItem=null,draggedFolder=null;
-  $$('#cards article.card[data-id]').forEach(el=>{el.draggable=true;el.classList.add("sortable-card");el.ondragstart=e=>{draggedItem=el.dataset.id;el.classList.add("dragging");e.dataTransfer.effectAllowed="move"};el.ondragend=()=>{el.classList.remove("dragging");draggedItem=null};el.ondragover=e=>e.preventDefault();el.ondrop=async e=>{e.preventDefault();const target=el.dataset.id;if(!draggedItem||draggedItem===target)return;const arr=[...rows],a=arr.findIndex(x=>String(x.id)===String(draggedItem)),b=arr.findIndex(x=>String(x.id)===String(target));if(a<0||b<0)return;const [item]=arr.splice(a,1);arr.splice(b,0,item);await persistWishlistOrder(arr)}});
-  $$('[data-folder-card]').forEach(el=>{el.ondragover=e=>{if(draggedItem||draggedFolder)e.preventDefault()};el.ondrop=async e=>{e.preventDefault();if(draggedItem){await moveWishlistItem(draggedItem,el.dataset.folderCard);return}if(draggedFolder&&draggedFolder!==el.dataset.folderCard){const arr=[...wishlistFolders],a=arr.findIndex(x=>x.id===draggedFolder),b=arr.findIndex(x=>x.id===el.dataset.folderCard);if(a<0||b<0)return;const [f]=arr.splice(a,1);arr.splice(b,0,f);for(let i=0;i<arr.length;i++){let q=db.from("wishlist_folders").update({sort_order:i}).eq("id",arr[i].id);const rr=await q;if(rr.error){alert(rr.error.message);return}}await load()}};el.draggable=true;el.ondragstart=e=>{if(draggedItem)return;draggedFolder=el.dataset.folderCard;e.dataTransfer.setData("text/plain",draggedFolder);el.classList.add("dragging")};el.ondragend=()=>{el.classList.remove("dragging");draggedFolder=null};});
+  const clearDragState=()=>{
+    $$('#cards .dragging, #cards .drag-over').forEach(el=>el.classList.remove('dragging','drag-over'));
+    draggedItem=null;draggedFolder=null;
+  };
+
+  // Cards: explicitly set dataTransfer data so native drag works consistently in Safari/Chrome.
+  $$('#cards article.card[data-id]').forEach(el=>{
+    el.draggable=true;
+    el.classList.add('sortable-card');
+    el.ondragstart=e=>{
+      draggedItem=String(el.dataset.id);
+      draggedFolder=null;
+      e.dataTransfer.effectAllowed='move';
+      e.dataTransfer.setData('text/plain',`item:${draggedItem}`);
+      el.classList.add('dragging');
+    };
+    el.ondragend=clearDragState;
+    el.ondragover=e=>{
+      if(!draggedItem||draggedItem===String(el.dataset.id))return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect='move';
+      el.classList.add('drag-over');
+    };
+    el.ondragleave=e=>{
+      if(!el.contains(e.relatedTarget))el.classList.remove('drag-over');
+    };
+    el.ondrop=async e=>{
+      e.preventDefault();
+      e.stopPropagation();
+      el.classList.remove('drag-over');
+      const target=String(el.dataset.id);
+      if(!draggedItem||draggedItem===target)return;
+      const arr=[...rows];
+      const a=arr.findIndex(x=>String(x.id)===draggedItem);
+      const b=arr.findIndex(x=>String(x.id)===target);
+      if(a<0||b<0)return;
+      const [item]=arr.splice(a,1);
+      arr.splice(b,0,item);
+      clearDragState();
+      await persistWishlistOrder(arr);
+    };
+  });
+
+  // Folders: accept dropped cards, or reorder folders with other folders.
+  $$('[data-folder-card]').forEach(el=>{
+    el.ondragover=e=>{
+      if(!draggedItem&&!draggedFolder)return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect='move';
+      el.classList.add('drag-over');
+    };
+    el.ondragleave=e=>{
+      if(!el.contains(e.relatedTarget))el.classList.remove('drag-over');
+    };
+    el.ondrop=async e=>{
+      e.preventDefault();
+      e.stopPropagation();
+      el.classList.remove('drag-over');
+      if(draggedItem){
+        const itemId=draggedItem;
+        clearDragState();
+        await moveWishlistItem(itemId,el.dataset.folderCard);
+        return;
+      }
+      if(draggedFolder&&draggedFolder!==el.dataset.folderCard){
+        const arr=[...wishlistFolders];
+        const a=arr.findIndex(x=>String(x.id)===String(draggedFolder));
+        const b=arr.findIndex(x=>String(x.id)===String(el.dataset.folderCard));
+        if(a<0||b<0)return;
+        const [folder]=arr.splice(a,1);
+        arr.splice(b,0,folder);
+        for(let i=0;i<arr.length;i++){
+          let q=db.from('wishlist_folders').update({sort_order:i}).eq('id',arr[i].id);
+          if(selectedScope==='private')q=q.is('share_group_id',null);else q=q.eq('share_group_id',selectedGroupId);
+          const result=await q;
+          if(result.error){alert(result.error.message);return;}
+        }
+        clearDragState();
+        await load();
+      }
+    };
+    el.draggable=true;
+    el.ondragstart=e=>{
+      if(draggedItem){e.preventDefault();return;}
+      draggedFolder=String(el.dataset.folderCard);
+      draggedItem=null;
+      e.dataTransfer.effectAllowed='move';
+      e.dataTransfer.setData('text/plain',`folder:${draggedFolder}`);
+      el.classList.add('dragging');
+    };
+    el.ondragend=clearDragState;
+  });
 }
 async function persistWishlistOrder(arr){
   const table=view==="todo"?"todos":view==="memo"?"memos":view;
@@ -346,14 +438,16 @@ async function toggleStarGroup(id){
 function renderScopePicker(){
   const el=$("#scopePicker");if(!el)return;
   const current=selectedScope==="group"&&selectedGroupId?groups.find(g=>g.id===selectedGroupId):null;
+  const isGroupScope=selectedScope==="group"&&!!selectedGroupId;
   const sorted=sortedGroupsList();
-  el.innerHTML=`<button type="button" class="scope-current"><span>${current?"👥":"👤"} ${esc(current?.name||"個人")}</span><span class="scope-chevron">⌄</span></button><div class="scope-menu hidden"><button type="button" class="scope-option ${!current?"active":""}" data-scope="private"><span>👤 個人</span></button>${sorted.map(g=>`<div class="scope-option-wrap"><button type="button" class="scope-option ${current?.id===g.id?"active":""}" data-scope="group:${esc(g.id)}"><span>${starredGroups.includes(g.id)?"⭐":"👥"} ${esc(g.name)}</span></button><button type="button" class="scope-star ${starredGroups.includes(g.id)?"starred":""}" data-star-id="${esc(g.id)}" title="${starredGroups.includes(g.id)?"取消標記":"標記"}">${starredGroups.includes(g.id)?"★":"☆"}</button></div>`).join("")}</div>`;
+  el.innerHTML=`<button type="button" class="scope-current"><span>${isGroupScope?"👥":"👤"} ${esc(isGroupScope?(current?.name||"群組") : "個人")}</span><span class="scope-chevron">⌄</span></button><div class="scope-menu hidden"><button type="button" class="scope-option ${!isGroupScope?"active":""}" data-scope="private"><span>👤 個人</span></button>${sorted.map(g=>`<div class="scope-option-wrap"><button type="button" class="scope-option ${current?.id===g.id?"active":""}" data-scope="group:${esc(g.id)}"><span>${starredGroups.includes(g.id)?"⭐":"👥"} ${esc(g.name)}</span></button><button type="button" class="scope-star ${starredGroups.includes(g.id)?"starred":""}" data-star-id="${esc(g.id)}" title="${starredGroups.includes(g.id)?"取消標記":"標記"}">${starredGroups.includes(g.id)?"★":"☆"}</button></div>`).join("")}</div>`;
   $(".scope-current",el).onclick=()=>$(".scope-menu",el).classList.toggle("hidden");
   $$(".scope-option",el).forEach(b=>b.onclick=()=>selectScope(b.dataset.scope));
   $$(".scope-star",el).forEach(b=>b.onclick=e=>{e.stopPropagation();toggleStarGroup(b.dataset.starId)});
   $("#groupManage").onclick=shareManager;
 }
 function selectScope(value){
+  if(saving||!$("#modal").classList.contains("hidden"))return;
   if(value==="private"){selectedScope="private";selectedGroupId=null;}
   else{selectedScope="group";selectedGroupId=value.slice(6);}
   renderScopePicker();
@@ -466,6 +560,7 @@ function openBatchForm(files){
 function setBatchStatus(i,status,kind="") {const el=$(`[data-batch-status="${i}"]`);if(el){el.textContent=status;el.className=`batch-status ${kind}`}}
 async function saveBatch(e){
   e.preventDefault();if(localStorage.getItem("myLittleSpaceImageConsent")!=="yes"){$("#fmsg").textContent="請先同意使用圖片附件。";return}if(saving)return;
+  const saveScope=selectedScope,saveGroupId=selectedGroupId,saveFolderId=folderViewId;
   const form=$("#form"),fd=new FormData(form),btn=form.querySelector(".save"),table=view==="todo"?"todos":view==="memo"?"memos":view,area=view;
   // Validate every required title before writing anything, avoiding silent skips.
   const missing=[];batchEntries.forEach((entry,i)=>{const key=view==="todo"||view==="memo"?"title":"name";const value=String(fd.get(`b${i}-${key}`)||"").trim();if(!entry.recordSaved&&!value)missing.push(i+1)});
@@ -476,7 +571,7 @@ async function saveBatch(e){
     let completed=0;for(let i=0;i<batchEntries.length;i++){
       const entry=batchEntries[i];if(entry.uploaded){completed++;continue}
       setBatchStatus(i,"處理中…","working");progress.textContent=`正在處理 ${i+1}/${batchEntries.length} 張照片`;
-      const get=k=>String(fd.get(`b${i}-${k}`)||"").trim();let v={user_id:u.id,share_group_id:selectedScope==="group"?selectedGroupId:null,folder_id:folderViewId||null,sort_order:Date.now()+i};
+      const get=k=>String(fd.get(`b${i}-${k}`)||"").trim();let v={user_id:u.id,share_group_id:saveScope==="group"?saveGroupId:null,folder_id:saveFolderId||null,sort_order:Date.now()+i};
       if(view==="food")Object.assign(v,{name:get("name"),category:fd.get("batch_category")||cat,mrt:get("mrt"),exit:get("exit"),walk_minutes:get("walk_minutes")?Number(get("walk_minutes")):null,maps_url:get("maps_url"),note:get("note")});
       if(view==="wishlist")Object.assign(v,{name:get("name"),country:fd.get("batch_country")||cat,purchase_place:get("purchase_place"),note:get("note")});
       if(view==="watchlist")Object.assign(v,{name:get("name"),category:fd.get("batch_category")||cat});
@@ -506,7 +601,9 @@ async function loadGroups(){
   currentUserId=u.id;
   await loadStarredGroups();
   const r=await db.from("share_group_members").select("group_id, share_groups(id,name,owner_id)").eq("user_id",u.id);
-  groups=(r.error?[]:(r.data||[]).map(x=>x.share_groups).filter(Boolean));
+  // A temporary network/RLS error must not make the active group appear to be Personal.
+  if(r.error){console.error("loadGroups failed; keeping previous group list",r.error);return;}
+  groups=(r.data||[]).map(x=>x.share_groups).filter(Boolean);
   starredGroups=starredGroups.filter(id=>groups.some(g=>g.id===id));
 }
 function groupOrderKey(){return `my-little-space-group-order-${currentUserId||""}`}
@@ -576,12 +673,12 @@ async function uploadAttachments(t,itemId,userId,input){
 }
 
 async function save(e,t){
-  e.preventDefault();if(saving)return;saving=true;const form=$("#form"),saveButton=form.querySelector(".save");if(saveButton){saveButton.disabled=true;saveButton.textContent="儲存中…"}$("#fmsg").textContent="";
+  e.preventDefault();if(saving)return;const saveScope=selectedScope,saveGroupId=selectedGroupId,saveFolderId=folderViewId;saving=true;const form=$("#form"),saveButton=form.querySelector(".save");if(saveButton){saveButton.disabled=true;saveButton.textContent="儲存中…"}$("#fmsg").textContent="";
   try{
     const v=Object.fromEntries(new FormData(e.target).entries());
     const {data:uData,error:authError}=await db.auth.getUser(),u=uData.user;if(authError||!u)throw new Error("登入狀態已失效，請重新登入。");
-    delete v.imageFiles;delete v.share_group_id;v.share_group_id=selectedScope==="group"?selectedGroupId:null;
-    v.folder_id=editing?.folder_id??folderViewId??null;if(!editing&&!pendingSave)v.sort_order=Date.now();
+    delete v.imageFiles;delete v.share_group_id;v.share_group_id=saveScope==="group"?saveGroupId:null;
+    v.folder_id=editing?.folder_id??saveFolderId??null;if(!editing&&!pendingSave)v.sort_order=Date.now();
     if(t==="food"&&v.walk_minutes==="")v.walk_minutes=null;
     if(t==="todo"){
       if(!v.start_date)v.start_date=null;if(!v.end_date)v.end_date=null;if(!v.event_time)v.event_time=null;
@@ -590,7 +687,7 @@ async function save(e,t){
     if(t==="memo"){v.category=null;v.table_data=JSON.stringify(readTable());if(v.table_data==="null")v.table_data=null;}
     const table=t==="todo"?"todos":t==="memo"?"memos":t;
     let itemId=editing?.id||pendingSave?.itemId;
-    if(editing||pendingSave){let q=db.from(table).update(v).eq("id",itemId);if(selectedScope==="private")q=q.eq("user_id",u.id).is("share_group_id",null);else q=q.eq("share_group_id",selectedGroupId);const r=await q;if(r.error)throw r.error;if(!pendingSave)pendingSave={itemId,table,uploadedKeys:[]};}
+    if(editing||pendingSave){let q=db.from(table).update(v).eq("id",itemId);if(saveScope==="private")q=q.eq("user_id",u.id).is("share_group_id",null);else q=q.eq("share_group_id",saveGroupId);const r=await q;if(r.error)throw r.error;if(!pendingSave)pendingSave={itemId,table,uploadedKeys:[]};}
     else{const r=await db.from(table).insert({...v,user_id:u.id}).select().single();if(r.error)throw r.error;itemId=r.data.id;pendingSave={itemId,table,uploadedKeys:[]};}
     const files=[...($("#imageFiles")?.files||[])];for(const file of files){const key=[file.name,file.size,file.lastModified,file.type].join("|");if(pendingSave.uploadedKeys.includes(key))continue;try{await uploadSingleAttachment(t,itemId,u.id,file);pendingSave.uploadedKeys.push(key)}catch(err){throw new Error("資料已儲存，但圖片附件上傳失敗："+(err.message||err)+"。可直接重試，已成功上傳的照片不會重複附加。")}}
     pendingSave=null;close();if(view===t){if(folderViewId&&v.folder_id==null)folderViewId=null;await load();}
