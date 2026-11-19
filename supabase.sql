@@ -433,3 +433,73 @@ with check (
 );
 
 notify pgrst,'reload schema';
+
+-- v31: Shopping folders and persistent manual item order.
+alter table public.wishlist add column if not exists folder_id uuid;
+alter table public.wishlist add column if not exists sort_order bigint not null default 0;
+
+create table if not exists public.wishlist_folders (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  share_group_id uuid references public.share_groups(id) on delete cascade,
+  name text not null,
+  category text not null,
+  sort_order bigint not null default 0,
+  created_at timestamptz not null default now()
+);
+
+alter table public.wishlist
+  drop constraint if exists wishlist_folder_id_fkey;
+alter table public.wishlist
+  add constraint wishlist_folder_id_fkey
+  foreign key (folder_id) references public.wishlist_folders(id) on delete set null;
+
+create index if not exists wishlist_folder_order_idx
+  on public.wishlist(folder_id,sort_order,created_at);
+create index if not exists wishlist_folders_private_idx
+  on public.wishlist_folders(user_id,category,sort_order)
+  where share_group_id is null;
+create index if not exists wishlist_folders_group_idx
+  on public.wishlist_folders(share_group_id,category,sort_order)
+  where share_group_id is not null;
+
+alter table public.wishlist_folders enable row level security;
+drop policy if exists wishlist_folders_all on public.wishlist_folders;
+create policy wishlist_folders_all on public.wishlist_folders for all to authenticated
+using (
+  (share_group_id is null and user_id=auth.uid())
+  or (share_group_id is not null and public.is_share_group_member(share_group_id))
+)
+with check (
+  (share_group_id is null and user_id=auth.uid())
+  or (share_group_id is not null and public.is_share_group_member(share_group_id))
+);
+
+notify pgrst, 'reload schema';
+
+
+-- v32: folders and manual ordering across every area (food, shopping, watchlist, life, memo).
+-- wishlist_folders is reused as a shared folder registry; area scopes each folder.
+alter table public.wishlist_folders add column if not exists area text not null default 'wishlist';
+alter table public.food add column if not exists folder_id uuid;
+alter table public.food add column if not exists sort_order bigint not null default 0;
+alter table public.watchlist add column if not exists folder_id uuid;
+alter table public.watchlist add column if not exists sort_order bigint not null default 0;
+alter table public.todos add column if not exists folder_id uuid;
+alter table public.todos add column if not exists sort_order bigint not null default 0;
+alter table public.memos add column if not exists folder_id uuid;
+alter table public.memos add column if not exists sort_order bigint not null default 0;
+alter table public.food drop constraint if exists food_folder_id_fkey;
+alter table public.food add constraint food_folder_id_fkey foreign key(folder_id) references public.wishlist_folders(id) on delete set null;
+alter table public.watchlist drop constraint if exists watchlist_folder_id_fkey;
+alter table public.watchlist add constraint watchlist_folder_id_fkey foreign key(folder_id) references public.wishlist_folders(id) on delete set null;
+alter table public.todos drop constraint if exists todos_folder_id_fkey;
+alter table public.todos add constraint todos_folder_id_fkey foreign key(folder_id) references public.wishlist_folders(id) on delete set null;
+alter table public.memos drop constraint if exists memos_folder_id_fkey;
+alter table public.memos add constraint memos_folder_id_fkey foreign key(folder_id) references public.wishlist_folders(id) on delete set null;
+create index if not exists food_folder_order_idx on public.food(folder_id,sort_order,created_at);
+create index if not exists watchlist_folder_order_idx on public.watchlist(folder_id,sort_order,created_at);
+create index if not exists todos_folder_order_idx on public.todos(folder_id,sort_order,created_at);
+create index if not exists memos_folder_order_idx on public.memos(folder_id,sort_order,created_at);
+create index if not exists area_folders_private_idx on public.wishlist_folders(user_id,area,category,sort_order) where share_group_id is null;
+create index if not exists area_folders_group_idx on public.wishlist_folders(share_group_id,area,category,sort_order) where share_group_id is not null;

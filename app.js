@@ -9,7 +9,7 @@ const cats={
   watchlist:["韓劇","陸劇","電影","其他"]
 };
 const ATTACH_BUCKET="attachments";
-let view="home",cat=null,editing=null,rows=[],register=false,attachmentsByItem={},groups=[],selectedScope="private",selectedGroupId=null,starredGroups=[],customCats={},groupOrder=[],currentUserId=null;
+let view="home",cat=null,editing=null,rows=[],register=false,attachmentsByItem={},groups=[],selectedScope="private",selectedGroupId=null,starredGroups=[],customCats={},groupOrder=[],currentUserId=null,folderViewId=null,wishlistFolders=[],saving=false;
 
 $("#switch").onclick=()=>{
   register=!register;
@@ -28,21 +28,23 @@ $$('[data-view]').forEach(b=>b.onclick=()=>openView(b.dataset.view));
 $("#back").onclick=home;
 $("#add").onclick=chooser;
 $("#add2").onclick=()=>openForm(view);
+$("#addFolder").onclick=createWishlistFolder;
 $("#scopePicker").onchange=e=>selectScope(e.target.value);
 $("#close").onclick=close;
 $("#closePhoto").onclick=closePhoto;
 $("#photoViewer").querySelector(".photo-shade").onclick=closePhoto;
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closePhoto()});
 
-function home(){$("#home").classList.remove("hidden");$("#list").classList.add("hidden");view="home";renderScopePicker()}
+function home(){$("#home").classList.remove("hidden");$("#list").classList.add("hidden");view="home";folderViewId=null;$("#addFolder")?.classList.add("hidden");renderScopePicker()}
 
 function openView(v){
-  view=v;
+  view=v;folderViewId=null;
   cat=v==="todo"?"提醒事項":v==="memo"?null:cats[v][0];
   $("#home").classList.add("hidden");
   $("#list").classList.remove("hidden");
   $("#title").textContent=areaTitle(v);
   $("#share").classList.add("hidden");
+  $("#addFolder")?.classList.remove("hidden");
   renderCats();
   load()
 }
@@ -56,7 +58,7 @@ function renderCats(){
   if(view==="memo"){ $("#cats").innerHTML=""; return; }
   const list=allCategories();
   $("#cats").innerHTML=list.map(c=>`<div class="cat-wrap"><button class="${c===cat?"active":""}" data-cat="${esc(c)}">${esc(c)}</button><button type="button" class="cat-remove" data-remove-cat="${esc(c)}" title="刪除分類" aria-label="刪除分類 ${esc(c)}">×</button></div>`).join("")+`<button type="button" class="cat-add" id="addCategory">＋ 類別</button>`;
-  $$('[data-cat]').forEach(b=>b.onclick=()=>{cat=b.dataset.cat;renderCats();load()});
+  $$('[data-cat]').forEach(b=>b.onclick=()=>{cat=b.dataset.cat;folderViewId=null;renderCats();load()});
   $$('[data-remove-cat]').forEach(b=>b.onclick=()=>removeCustomCategory(b.dataset.removeCat));
   $("#addCategory").onclick=addCustomCategory;
   enableCategoryDrag();
@@ -137,61 +139,119 @@ function enableCategoryDrag(){
   $$(".cat-wrap",wrap).forEach(w=>{w.draggable=true;w.ondragstart=e=>{e.dataTransfer.setData("text/plain",w.querySelector("[data-cat]").dataset.cat);w.classList.add("dragging")};w.ondragend=()=>w.classList.remove("dragging");w.ondragover=e=>e.preventDefault();w.ondrop=e=>{e.preventDefault();const from=e.dataTransfer.getData("text/plain"),to=w.querySelector("[data-cat]")?.dataset.cat;if(!from||!to||from===to)return;const arr=[...allCategories()],a=arr.indexOf(from),b=arr.indexOf(to);if(a<0||b<0)return;arr.splice(a,1);arr.splice(b,0,from);reorderCustomCategories(arr)};});
 }
 async function load(){
+  const requestedView=view, requestedScope=selectedScope, requestedGroup=selectedGroupId, requestedCat=cat;
   const table=view==="todo"?"todos":view==="memo"?"memos":view;
   const {data:uData}=await db.auth.getUser(),u=uData.user;
   if(!u)return;
   await loadGroups();
+  if(requestedView!==view||requestedScope!==selectedScope||requestedGroup!==selectedGroupId)return;
   await loadCategories();
+  if(requestedView!==view||requestedScope!==selectedScope||requestedGroup!==selectedGroupId)return;
   if(view==="memo")cat=null;
   else if(!allCategories().includes(cat))cat=allCategories()[0]||"";
   renderCats();
-  let q;
-  if(view==="memo"||view==="todo") {
-    if(selectedScope==="group" && selectedGroupId){
-      q=db.from(table).select("*").eq("share_group_id",selectedGroupId);
-    }else{
-      q=db.from(table).select("*").eq("user_id",u.id).is("share_group_id",null);
-    }
-    if(view!=="memo" && cat)q=q.eq(filterColumn(),cat);
-  } else {
-    if(selectedScope==="group" && selectedGroupId){
-      q=db.from(table).select("*").eq("share_group_id",selectedGroupId);
-    }else{
-      q=db.from(table).select("*").eq("user_id",u.id).is("share_group_id",null);
-    }
-    if(view!=="memo" && cat)q=q.eq(filterColumn(),cat);
-  }
-  const r=await q.order("created_at",{ascending:false});
-  if(r.error){console.error(r.error);$("#cards").innerHTML=`<p class="meta">${esc(r.error.message)}</p>`;return}
+  let q=db.from(table).select("*");
+  if(selectedScope==="group"&&selectedGroupId)q=q.eq("share_group_id",selectedGroupId);
+  else q=q.eq("user_id",u.id).is("share_group_id",null);
+  if(view!=="memo"&&cat)q=q.eq(filterColumn(),cat);
+  if(folderViewId)q=q.eq("folder_id",folderViewId);else q=q.is("folder_id",null);
+  const r=await q.order("sort_order",{ascending:true}).order("created_at",{ascending:false});
+  if(r.error){console.error(r.error);$("#cards").innerHTML=`<p class="meta">${esc(r.error.message)}<br>如果是購物資料夾功能第一次使用，請先執行 v31 的 Supabase SQL。</p>`;return}
+  if(requestedView!==view||requestedScope!==selectedScope||requestedGroup!==selectedGroupId)return;
   rows=r.data||[];
+  if(rows.length&&new Set(rows.map(x=>Number(x.sort_order)||0)).size!==rows.length){
+    for(let i=0;i<rows.length;i++){let oq=db.from("wishlist").update({sort_order:i}).eq("id",rows[i].id);if(selectedScope==="private")oq=oq.is("share_group_id",null);else oq=oq.eq("share_group_id",selectedGroupId);const or=await oq;if(or.error){console.error(or.error);break}rows[i].sort_order=i}
+  }
   attachmentsByItem={};
   if(rows.length){
     const ar=await db.from("attachments").select("*").eq("item_type",view).in("item_id",rows.map(x=>String(x.id)));
     if(!ar.error)(ar.data||[]).forEach(a=>(attachmentsByItem[String(a.item_id)]??=[]).push(a));
   }
-  $("#cards").innerHTML=rows.map(renderRow).join("");
+  await loadWishlistFolders();
+  const folderMarkup=!folderViewId?wishlistFolders.map(renderWishlistFolder).join(""):"";
+  const backMarkup=folderViewId?`<div class="folder-backbar"><button type="button" id="folderBack" class="gray">← 所有項目</button><span>📁 ${esc(wishlistFolders.find(f=>f.id===folderViewId)?.name||"資料夾")}</span></div>`:"";
+  $("#folderToolbar").innerHTML=backMarkup;
+  $("#cards").innerHTML=folderMarkup+rows.map(renderRow).join("");
+  $("#folderBack")?.addEventListener("click",()=>{folderViewId=null;load()});
   $$(".edit").forEach(b=>b.onclick=()=>openForm(view,rows.find(x=>String(x.id)===String(b.dataset.id))));
   $$(".del").forEach(b=>b.onclick=()=>remove(b.dataset.id));
-  $$('[data-check]').forEach(b=>b.onchange=async()=>{
-    const r=await db.from("todos").update({done:b.checked}).eq("id",b.dataset.check);
-    if(r.error)alert(r.error.message);await load()
-  });
+  $$('[data-check]').forEach(b=>b.onchange=async()=>{const rr=await db.from("todos").update({done:b.checked}).eq("id",b.dataset.check);if(rr.error)alert(rr.error.message);await load()});
   $$('[data-attachment-delete]').forEach(b=>b.onclick=()=>removeAttachment(b.dataset.attachmentDelete,b.dataset.path));
   $$('[data-photo-url]').forEach(b=>b.onclick=()=>openPhoto(b.dataset.photoUrl,b.dataset.photoName));
+  wireWishlistDnD();$$("[data-move-root]").forEach(b=>b.onclick=()=>moveWishlistItem(b.dataset.moveRoot,null));
 }
+async function loadWishlistFolders(){
+  let q=db.from("wishlist_folders").select("id,name,sort_order,user_id,share_group_id,area").eq("area",view);
+  if(selectedScope==="group"&&selectedGroupId)q=q.eq("share_group_id",selectedGroupId);
+  else q=q.eq("user_id",currentUserId).is("share_group_id",null);
+  if(cat)q=q.eq("category",cat);
+  const r=await q.order("sort_order",{ascending:true}).order("created_at",{ascending:true});
+  if(r.error){wishlistFolders=[];console.error(r.error);return}
+  wishlistFolders=r.data||[];
+}
+function renderWishlistFolder(f){
+  const countLabel="📁 資料夾";
+  return `<article class="card folder-card" draggable="true" data-folder-card="${esc(f.id)}"><button type="button" class="folder-open" data-open-folder="${esc(f.id)}"><span class="folder-icon">📁</span><span class="folder-name">${esc(f.name)}</span><span class="folder-sub">${countLabel}</span></button><div class="actions"><button type="button" class="folder-rename" data-rename-folder="${esc(f.id)}">✎ 重新命名</button><button type="button" class="del folder-delete" data-delete-folder="${esc(f.id)}">🗑 刪除</button></div></article>`;
+}
+async function createWishlistFolder(){
+  const name=prompt("資料夾名稱，例如：3COINS、無印良品");if(name===null)return;
+  const clean=name.trim().slice(0,40);if(!clean)return;
+  if(wishlistFolders.some(f=>f.name.toLowerCase()===clean.toLowerCase())){alert("這個資料夾名稱已經存在。");return}
+  const {data}=await db.auth.getUser(),u=data.user;if(!u)return;
+  const payload={user_id:u.id,share_group_id:selectedScope==="group"?selectedGroupId:null,name:clean,category:cat||"全部",area:view,sort_order:wishlistFolders.length};
+  const r=await db.from("wishlist_folders").insert(payload);
+  if(r.error){alert(r.error.message);return}await load();
+}
+async function renameWishlistFolder(id){
+  const f=wishlistFolders.find(x=>x.id===id);if(!f)return;
+  const name=prompt("修改資料夾名稱",f.name);if(name===null)return;
+  const clean=name.trim().slice(0,40);if(!clean)return;
+  let q=db.from("wishlist_folders").update({name:clean}).eq("id",id);
+  if(selectedScope==="private")q=q.is("share_group_id",null);else q=q.eq("share_group_id",selectedGroupId);
+  const r=await q;if(r.error){alert(r.error.message);return}await load();
+}
+async function deleteWishlistFolder(id){
+  const f=wishlistFolders.find(x=>x.id===id);if(!f)return;
+  if(!await askConfirm(`確定刪除「${f.name}」資料夾嗎？裡面的項目會移回原本分類，不會被刪除。`))return;
+  const table=view==="todo"?"todos":view==="memo"?"memos":view;
+  let move=db.from(table).update({folder_id:null}).eq("folder_id",id);
+  if(selectedScope==="private")move=move.is("share_group_id",null);else move=move.eq("share_group_id",selectedGroupId);
+  const mr=await move;if(mr.error){alert(mr.error.message);return}
+  const r=await db.from("wishlist_folders").delete().eq("id",id);if(r.error){alert(r.error.message);return}await load();
+}
+async function moveWishlistItem(id,folderId){
+  const table=view==="todo"?"todos":view==="memo"?"memos":view;
+  let q=db.from(table).update({folder_id:folderId,sort_order:Date.now()}).eq("id",id);
+  if(selectedScope==="private")q=q.is("share_group_id",null);else q=q.eq("share_group_id",selectedGroupId);
+  const r=await q;if(r.error){alert(r.error.message);return}await load();
+}
+function wireWishlistDnD(){
+  $$('[data-open-folder]').forEach(b=>b.onclick=()=>{folderViewId=b.dataset.openFolder;load()});
+  $$('[data-rename-folder]').forEach(b=>b.onclick=()=>renameWishlistFolder(b.dataset.renameFolder));
+  $$('[data-delete-folder]').forEach(b=>b.onclick=()=>deleteWishlistFolder(b.dataset.deleteFolder));
+  let draggedItem=null,draggedFolder=null;
+  $$('#cards article.card[data-id]').forEach(el=>{el.draggable=true;el.classList.add("sortable-card");el.ondragstart=e=>{draggedItem=el.dataset.id;el.classList.add("dragging");e.dataTransfer.effectAllowed="move"};el.ondragend=()=>{el.classList.remove("dragging");draggedItem=null};el.ondragover=e=>e.preventDefault();el.ondrop=async e=>{e.preventDefault();const target=el.dataset.id;if(!draggedItem||draggedItem===target)return;const arr=[...rows],a=arr.findIndex(x=>String(x.id)===String(draggedItem)),b=arr.findIndex(x=>String(x.id)===String(target));if(a<0||b<0)return;const [item]=arr.splice(a,1);arr.splice(b,0,item);await persistWishlistOrder(arr)}});
+  $$('[data-folder-card]').forEach(el=>{el.ondragover=e=>{if(draggedItem||draggedFolder)e.preventDefault()};el.ondrop=async e=>{e.preventDefault();if(draggedItem){await moveWishlistItem(draggedItem,el.dataset.folderCard);return}if(draggedFolder&&draggedFolder!==el.dataset.folderCard){const arr=[...wishlistFolders],a=arr.findIndex(x=>x.id===draggedFolder),b=arr.findIndex(x=>x.id===el.dataset.folderCard);if(a<0||b<0)return;const [f]=arr.splice(a,1);arr.splice(b,0,f);for(let i=0;i<arr.length;i++){let q=db.from("wishlist_folders").update({sort_order:i}).eq("id",arr[i].id);const rr=await q;if(rr.error){alert(rr.error.message);return}}await load()}};el.draggable=true;el.ondragstart=e=>{if(draggedItem)return;draggedFolder=el.dataset.folderCard;e.dataTransfer.setData("text/plain",draggedFolder);el.classList.add("dragging")};el.ondragend=()=>{el.classList.remove("dragging");draggedFolder=null};});
+}
+async function persistWishlistOrder(arr){
+  const table=view==="todo"?"todos":view==="memo"?"memos":view;
+  for(let i=0;i<arr.length;i++){let q=db.from(table).update({sort_order:i}).eq("id",arr[i].id);if(selectedScope==="private")q=q.is("share_group_id",null);else q=q.eq("share_group_id",selectedGroupId);const r=await q;if(r.error){alert(r.error.message);return}}
+  await load();
+}
+
 function renderRow(r){
   const att=attachmentsHtml(r.id);
   if(view==="food")return card(`🍽️ ${esc(r.name)}`,`${r.mrt?`🚇 ${esc(r.mrt)} `:""}${r.exit?`🚪 ${esc(r.exit)}號出口 `:""}${r.walk_minutes!=null?`🚶🏻‍♀️ ${r.walk_minutes} 分鐘`:""}`,safeUrl(r.maps_url)?`<a class="meta" href="${esc(safeUrl(r.maps_url))}" target="_blank" rel="noopener">🗺️ Google Maps</a>`:"",r,att);
-  if(view==="wishlist")return card(`🛍️ ${esc(r.name)}`,r.purchase_place?`📍 ${esc(r.purchase_place)}`:"","",r,att);
+  if(view==="wishlist")return `<article class="card" data-id="${esc(r.id)}"><div class="name">🛍️ ${esc(r.name)}</div>${r.purchase_place?`<div class="meta">📍 ${esc(r.purchase_place)}</div>`:""}${r.note?`<div class="meta">${esc(r.note)}</div>`:""}${att}${folderViewId?`<div class="actions"><button type="button" class="move-root" data-move-root="${esc(r.id)}">↩ 移出資料夾</button>${actions(r.id)}</div>`:actions(r.id)}</article>`;
   if(view==="watchlist")return card(`✦ ${esc(r.name)}`,"","",r,att);
-  if(view==="memo")return `<article class="card"><div class="name">📝 ${esc(r.title||"未命名備忘錄")}${scopeBadge(r)}</div>${r.content?`<div class="memo-content">${esc(r.content).replace(/\n/g,"<br>")}</div>`:""}${memoUrlsHtml(r.urls)}${tableHtml(r.table_data)}${att}${actions(r.id)}</article>`;
+  if(view==="memo")return `<article class="card" data-id="${esc(r.id)}"><div class="name">📝 ${esc(r.title||"未命名備忘錄")}${scopeBadge(r)}</div>${r.content?`<div class="memo-content">${esc(r.content).replace(/\n/g,"<br>")}</div>`:""}${memoUrlsHtml(r.urls)}${tableHtml(r.table_data)}${att}${folderViewId?`<div class="actions"><button type="button" class="move-root" data-move-root="${esc(r.id)}">↩ 移出資料夾</button>${actions(r.id)}</div>`:actions(r.id)}</article>`;
   const range=formatRange(r.start_date||r.event_date,r.end_date);
-  return `<article class="card"><div class="name"><input type="checkbox" data-check="${r.id}" ${r.done?"checked":""}> ${esc(r.title)}${scopeBadge(r)}</div>${range?`<div class="meta">📅 ${esc(range)}${r.event_time?` ⏰ ${esc(r.event_time)}`:""}</div>`:""}${r.location?`<div class="meta">📍 ${esc(r.location)}</div>`:""}${r.note?`<div class="meta">${esc(r.note)}</div>`:""}${att}${actions(r.id)}</article>`;
+  return `<article class="card" data-id="${esc(r.id)}"><div class="name"><input type="checkbox" data-check="${r.id}" ${r.done?"checked":""}> ${esc(r.title)}${scopeBadge(r)}</div>${range?`<div class="meta">📅 ${esc(range)}${r.event_time?` ⏰ ${esc(r.event_time)}`:""}</div>`:""}${r.location?`<div class="meta">📍 ${esc(r.location)}</div>`:""}${r.note?`<div class="meta">${esc(r.note)}</div>`:""}${att}${folderViewId?`<div class="actions"><button type="button" class="move-root" data-move-root="${esc(r.id)}">↩ 移出資料夾</button>${actions(r.id)}</div>`:actions(r.id)}</article>`;
 }
 function formatDate(d){if(!d)return"";const p=String(d).split("-");return p.length===3?`${Number(p[0])}/${Number(p[1])}/${Number(p[2])}`:String(d)}
 function formatRange(start,end){if(start&&end&&start!==end)return `${formatDate(start)} ～ ${formatDate(end)}`;return formatDate(start||end)}
 function scopeBadge(r){return ""}
-function card(n,m,x,r,att=""){return `<article class="card"><div class="name">${n}${scopeBadge(r)}</div>${m?`<div class="meta">${m}</div>`:""}${x?`<div>${x}</div>`:""}${r.note?`<div class="meta">${esc(r.note)}</div>`:""}${att}${actions(r.id)}</article>`}
+function card(n,m,x,r,att=""){return `<article class="card" data-id="${esc(r.id)}"><div class="name">${n}${scopeBadge(r)}</div>${m?`<div class="meta">${m}</div>`:""}${x?`<div>${x}</div>`:""}${r.note?`<div class="meta">${esc(r.note)}</div>`:""}${att}${folderViewId?`<div class="actions"><button type="button" class="move-root" data-move-root="${esc(r.id)}">↩ 移出資料夾</button>${actions(r.id)}</div>`:actions(r.id)}</article>`}
 function actions(id){return `<div class="actions"><button class="edit" data-id="${id}">✎ 編輯</button><button class="del" data-id="${id}">🗑 刪除</button></div>`}
 
 function attachmentsHtml(id){
@@ -297,7 +357,7 @@ function selectScope(value){
 }
 
 function attachmentField(){
-  return `<div class="attachment-field"><label>📎 圖片附件</label><button type="button" id="allowImages" class="consent-btn">先同意使用圖片，再選擇圖片</button><input id="imageFiles" name="imageFiles" type="file" accept="image/*" multiple hidden><small>你可以一次選擇多張圖片。網站不會自動讀取你的整個相簿，只有你在系統選擇並確認的圖片才會被上傳。</small></div>`
+  return `<div class="attachment-field"><label>📎 圖片附件</label><button type="button" id="allowImages" class="consent-btn">先同意使用圖片，再選擇圖片</button><input id="imageFiles" name="imageFiles" type="file" accept="image/*" multiple hidden><div id="imageSelectionStatus" class="image-selection-status" aria-live="polite">尚未選取新圖片</div><div id="imageSelectionList" class="image-selection-list"></div><small>你可以一次選擇多張圖片。網站不會自動讀取你的整個相簿，只有你在系統選擇並確認的圖片才會被上傳。</small></div>`
 }
 
 function fields(t,r={}){
@@ -374,6 +434,7 @@ function openForm(t,r=null){
       localStorage.setItem("myLittleSpaceImageConsent","yes");
       input.click();
     };
+    input.onchange=()=>{const files=[...input.files||[]];const status=$("#imageSelectionStatus"),list=$("#imageSelectionList");if(!files.length){status.textContent="尚未選取新圖片";status.classList.remove("selected");list.innerHTML="";return}status.textContent=`✓ 已選取 ${files.length} 張圖片，儲存時會一併上傳`;status.classList.add("selected");list.innerHTML=files.map(f=>`<span>📷 ${esc(f.name)}</span>`).join("");};
   }
 }
 function chooser(){
@@ -458,19 +519,20 @@ async function uploadAttachments(t,itemId,userId,input){
 }
 
 async function save(e,t){
-  e.preventDefault();$("#fmsg").textContent="";
+  e.preventDefault();if(saving)return;saving=true;const saveButton=$("#form .save");if(saveButton){saveButton.disabled=true;saveButton.textContent="儲存中…"}$("#fmsg").textContent="";
   const v=Object.fromEntries(new FormData(e.target).entries());
   const {data:uData}=await db.auth.getUser(),u=uData.user;
-  if(!u){$("#fmsg").textContent="登入狀態已失效，請重新登入。";return}
+  if(!u){$("#fmsg").textContent="登入狀態已失效，請重新登入。";saving=false;if(saveButton){saveButton.disabled=false;saveButton.textContent="儲存"}return}
   delete v.imageFiles;
   delete v.share_group_id;
   v.share_group_id=selectedScope==="group" ? selectedGroupId : null;
+  v.folder_id=editing?.folder_id??folderViewId??null;if(!editing)v.sort_order=Date.now();
   if(t==="food"&&v.walk_minutes==="")v.walk_minutes=null;
   if(t==="todo"){
     if(!v.start_date)v.start_date=null;
     if(!v.end_date)v.end_date=null;
     if(!v.event_time)v.event_time=null;
-    if(v.start_date&&v.end_date&&v.end_date<v.start_date){$("#fmsg").textContent="結束日期不能早於開始日期。";return}
+    if(v.start_date&&v.end_date&&v.end_date<v.start_date){$("#fmsg").textContent="結束日期不能早於開始日期。";saving=false;if(saveButton){saveButton.disabled=false;saveButton.textContent="儲存"}return}
     v.done=editing?.done??false;
   }
   if(t==="memo"){
@@ -488,15 +550,15 @@ async function save(e,t){
   }else{
     r=await db.from(table).insert({...v,user_id:u.id}).select().single();
   }
-  if(r.error){$("#fmsg").textContent=r.error.message;return}
+  if(r.error){$("#fmsg").textContent=r.error.message;saving=false;if(saveButton){saveButton.disabled=false;saveButton.textContent="儲存"}return}
   const itemId=editing?.id||r.data?.id;
   try{
     await uploadAttachments(t,itemId,u.id,$("#imageFiles"));
   }catch(err){
-    $("#fmsg").textContent="資料已儲存，但圖片附件上傳失敗："+(err.message||err);
+    $("#fmsg").textContent="資料已儲存，但圖片附件上傳失敗："+(err.message||err);saving=false;if(saveButton){saveButton.disabled=false;saveButton.textContent="儲存"}
     return;
   }
-  close();if(view===t||(view==="todo"&&t==="todo")||(view==="memo"&&t==="memo"))await load();
+  close();saving=false;if(view===t){if(folderViewId&&v.folder_id==null)folderViewId=null;await load();}
 }
 
 async function loadUserName(){
@@ -516,6 +578,6 @@ async function editUserName(){
 }
 $("#editName").onclick=editUserName;
 db.auth.getSession().then(({data})=>data.session?showApp():showAuth());
-db.auth.onAuthStateChange((_e,s)=>s?showApp():showAuth());
+db.auth.onAuthStateChange((event,s)=>{if(s){if($("#app").classList.contains("hidden"))showApp()}else if(event==="SIGNED_OUT")showAuth()});
 function showAuth(){$("#auth").classList.remove("hidden");$("#app").classList.add("hidden")}
 async function showApp(){$("#auth").classList.add("hidden");$("#app").classList.remove("hidden");loadUserName();await loadGroups();home()}
