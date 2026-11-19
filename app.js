@@ -181,8 +181,6 @@ async function load(){
   $$('[data-check]').forEach(b=>b.onchange=async()=>{const rr=await db.from("todos").update({done:b.checked}).eq("id",b.dataset.check);if(rr.error)alert(rr.error.message);await load()});
   $$('[data-attachment-delete]').forEach(b=>b.onclick=()=>removeAttachment(b.dataset.attachmentDelete,b.dataset.path));
   $$('[data-photo-url]').forEach(b=>b.onclick=()=>openPhoto(b.dataset.photoUrl,b.dataset.photoName));
-  $$(`[data-step-item]`).forEach(b=>b.onclick=()=>stepItemOrder(b.dataset.stepItem,Number(b.dataset.step)));
-  $$(`[data-step-folder]`).forEach(b=>b.onclick=()=>stepFolderOrder(b.dataset.stepFolder,Number(b.dataset.step)));
   wireWishlistDnD();$$("[data-move-root]").forEach(b=>b.onclick=()=>moveWishlistItem(b.dataset.moveRoot,null));
 }
 async function loadWishlistFolders(){
@@ -196,7 +194,7 @@ async function loadWishlistFolders(){
 }
 function renderWishlistFolder(f){
   const countLabel="📁 資料夾";
-  return `<article class="card folder-card" draggable="true" data-folder-card="${esc(f.id)}"><button type="button" class="folder-open" data-open-folder="${esc(f.id)}"><span class="folder-icon">📁</span><span class="folder-name">${esc(f.name)}</span><span class="folder-sub">${countLabel}</span>${f.note?`<span class="folder-note">${esc(f.note)}</span>`:""}</button><div class="actions"><button type="button" class="order-step" data-step-folder="${esc(f.id)}" data-step="-1" aria-label="資料夾往前移">↑</button><button type="button" class="order-step" data-step-folder="${esc(f.id)}" data-step="1" aria-label="資料夾往後移">↓</button><button type="button" class="folder-rename" data-rename-folder="${esc(f.id)}">✎ 編輯</button><button type="button" class="del folder-delete" data-delete-folder="${esc(f.id)}">🗑 刪除</button></div></article>`;
+  return `<article class="card folder-card" draggable="true" data-folder-card="${esc(f.id)}"><button type="button" class="folder-open" data-open-folder="${esc(f.id)}"><span class="folder-icon">📁</span><span class="folder-name">${esc(f.name)}</span><span class="folder-sub">${countLabel}</span>${f.note?`<span class="folder-note">${esc(f.note)}</span>`:""}</button><div class="actions"><button type="button" class="folder-rename" data-rename-folder="${esc(f.id)}">✎ 編輯</button><button type="button" class="del folder-delete" data-delete-folder="${esc(f.id)}">🗑 刪除</button></div></article>`;
 }
 async function createWishlistFolder(){
   openFolderForm();
@@ -226,8 +224,6 @@ async function deleteWishlistFolder(id){
   const mr=await move;if(mr.error){alert(mr.error.message);return}
   const r=await db.from("wishlist_folders").delete().eq("id",id);if(r.error){alert(r.error.message);return}await load();
 }
-async function stepItemOrder(id,delta){const arr=[...rows],i=arr.findIndex(x=>String(x.id)===String(id)),j=i+delta;if(i<0||j<0||j>=arr.length)return;const [item]=arr.splice(i,1);arr.splice(j,0,item);await persistWishlistOrder(arr)}
-async function stepFolderOrder(id,delta){const arr=[...wishlistFolders],i=arr.findIndex(x=>String(x.id)===String(id)),j=i+delta;if(i<0||j<0||j>=arr.length)return;const [item]=arr.splice(i,1);arr.splice(j,0,item);for(let k=0;k<arr.length;k++){const r=await db.from("wishlist_folders").update({sort_order:k}).eq("id",arr[k].id);if(r.error){alert(`排序儲存失敗：${r.error.message}`);return}}await load()}
 async function moveWishlistItem(id,folderId){
   const table=view==="todo"?"todos":view==="memo"?"memos":view;
   let q=db.from(table).update({folder_id:folderId,sort_order:Date.now()}).eq("id",id);
@@ -261,7 +257,7 @@ function formatDate(d){if(!d)return"";const p=String(d).split("-");return p.leng
 function formatRange(start,end){if(start&&end&&start!==end)return `${formatDate(start)} ～ ${formatDate(end)}`;return formatDate(start||end)}
 function scopeBadge(r){return ""}
 function card(n,m,x,r,att=""){return `<article class="card" data-id="${esc(r.id)}"><div class="name">${n}${scopeBadge(r)}</div>${m?`<div class="meta">${m}</div>`:""}${x?`<div>${x}</div>`:""}${r.note?`<div class="meta">${esc(r.note)}</div>`:""}${att}${folderViewId?`<div class="actions"><button type="button" class="move-root" data-move-root="${esc(r.id)}">↩ 移出資料夾</button>${actions(r.id)}</div>`:actions(r.id)}</article>`}
-function actions(id){return `<div class="actions"><button type="button" class="order-step" data-step-item="${esc(id)}" data-step="-1" aria-label="往前移">↑</button><button type="button" class="order-step" data-step-item="${esc(id)}" data-step="1" aria-label="往後移">↓</button><button class="edit" data-id="${esc(id)}">✎ 編輯</button><button class="del" data-id="${esc(id)}">🗑 刪除</button></div>`}
+function actions(id){return `<div class="actions"><button class="edit" data-id="${esc(id)}">✎ 編輯</button><button class="del" data-id="${esc(id)}">🗑 刪除</button></div>`}
 
 function attachmentsHtml(id){
   const arr=attachmentsByItem[String(id)]||[];
