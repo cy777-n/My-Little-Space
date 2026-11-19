@@ -9,7 +9,7 @@ const cats={
   watchlist:["韓劇","陸劇","電影","其他"]
 };
 const ATTACH_BUCKET="attachments";
-let view="home",cat=null,editing=null,rows=[],register=false,attachmentsByItem={},groups=[],selectedScope="private",selectedGroupId=null,starredGroups=[],customCats={},groupOrder=[],currentUserId=null,folderViewId=null,wishlistFolders=[],saving=false;
+let view="home",cat=null,editing=null,rows=[],register=false,attachmentsByItem={},groups=[],selectedScope="private",selectedGroupId=null,starredGroups=[],customCats={},groupOrder=[],currentUserId=null,folderViewId=null,wishlistFolders=[],saving=false,batchObjectUrls=[],batchEntries=[],pendingSave=null;
 
 $("#switch").onclick=()=>{
   register=!register;
@@ -29,13 +29,15 @@ $("#back").onclick=home;
 $("#add").onclick=chooser;
 $("#add2").onclick=()=>openForm(view);
 $("#addFolder").onclick=createWishlistFolder;
+$("#batchAdd").onclick=()=>{if(localStorage.getItem("myLittleSpaceImageConsent")!=="yes"){const ok=confirm("圖片附件權限\n\n是否同意在你主動選擇照片後使用這些圖片？網站不會自行讀取整個相簿。");if(!ok)return;localStorage.setItem("myLittleSpaceImageConsent","yes")}const input=$("#batchImages");input.value="";input.click()};
+$("#batchImages").onchange=e=>{const files=[...e.target.files||[]].filter(f=>f.type.startsWith("image/"));if(files.length)openBatchForm(files)};
 $("#scopePicker").onchange=e=>selectScope(e.target.value);
 $("#close").onclick=close;
 $("#closePhoto").onclick=closePhoto;
 $("#photoViewer").querySelector(".photo-shade").onclick=closePhoto;
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closePhoto()});
 
-function home(){$("#home").classList.remove("hidden");$("#list").classList.add("hidden");view="home";folderViewId=null;$("#addFolder")?.classList.add("hidden");renderScopePicker()}
+function home(){$("#home").classList.remove("hidden");$("#list").classList.add("hidden");view="home";folderViewId=null;$("#addFolder")?.classList.add("hidden");$("#batchAdd")?.classList.add("hidden");renderScopePicker()}
 
 function openView(v){
   view=v;folderViewId=null;
@@ -45,6 +47,7 @@ function openView(v){
   $("#title").textContent=areaTitle(v);
   $("#share").classList.add("hidden");
   $("#addFolder")?.classList.remove("hidden");
+  $("#batchAdd")?.classList.remove("hidden");
   renderCats();
   load()
 }
@@ -160,7 +163,7 @@ async function load(){
   if(requestedView!==view||requestedScope!==selectedScope||requestedGroup!==selectedGroupId)return;
   rows=r.data||[];
   if(rows.length&&new Set(rows.map(x=>Number(x.sort_order)||0)).size!==rows.length){
-    for(let i=0;i<rows.length;i++){let oq=db.from("wishlist").update({sort_order:i}).eq("id",rows[i].id);if(selectedScope==="private")oq=oq.is("share_group_id",null);else oq=oq.eq("share_group_id",selectedGroupId);const or=await oq;if(or.error){console.error(or.error);break}rows[i].sort_order=i}
+    for(let i=0;i<rows.length;i++){let oq=db.from(table).update({sort_order:i}).eq("id",rows[i].id);if(selectedScope==="private")oq=oq.is("share_group_id",null);else oq=oq.eq("share_group_id",selectedGroupId);const or=await oq;if(or.error){console.error(or.error);break}rows[i].sort_order=i}
   }
   attachmentsByItem={};
   if(rows.length){
@@ -178,10 +181,12 @@ async function load(){
   $$('[data-check]').forEach(b=>b.onchange=async()=>{const rr=await db.from("todos").update({done:b.checked}).eq("id",b.dataset.check);if(rr.error)alert(rr.error.message);await load()});
   $$('[data-attachment-delete]').forEach(b=>b.onclick=()=>removeAttachment(b.dataset.attachmentDelete,b.dataset.path));
   $$('[data-photo-url]').forEach(b=>b.onclick=()=>openPhoto(b.dataset.photoUrl,b.dataset.photoName));
+  $$(`[data-step-item]`).forEach(b=>b.onclick=()=>stepItemOrder(b.dataset.stepItem,Number(b.dataset.step)));
+  $$(`[data-step-folder]`).forEach(b=>b.onclick=()=>stepFolderOrder(b.dataset.stepFolder,Number(b.dataset.step)));
   wireWishlistDnD();$$("[data-move-root]").forEach(b=>b.onclick=()=>moveWishlistItem(b.dataset.moveRoot,null));
 }
 async function loadWishlistFolders(){
-  let q=db.from("wishlist_folders").select("id,name,sort_order,user_id,share_group_id,area").eq("area",view);
+  let q=db.from("wishlist_folders").select("id,name,note,sort_order,user_id,share_group_id,area").eq("area",view);
   if(selectedScope==="group"&&selectedGroupId)q=q.eq("share_group_id",selectedGroupId);
   else q=q.eq("user_id",currentUserId).is("share_group_id",null);
   if(cat)q=q.eq("category",cat);
@@ -191,24 +196,26 @@ async function loadWishlistFolders(){
 }
 function renderWishlistFolder(f){
   const countLabel="📁 資料夾";
-  return `<article class="card folder-card" draggable="true" data-folder-card="${esc(f.id)}"><button type="button" class="folder-open" data-open-folder="${esc(f.id)}"><span class="folder-icon">📁</span><span class="folder-name">${esc(f.name)}</span><span class="folder-sub">${countLabel}</span></button><div class="actions"><button type="button" class="folder-rename" data-rename-folder="${esc(f.id)}">✎ 重新命名</button><button type="button" class="del folder-delete" data-delete-folder="${esc(f.id)}">🗑 刪除</button></div></article>`;
+  return `<article class="card folder-card" draggable="true" data-folder-card="${esc(f.id)}"><button type="button" class="folder-open" data-open-folder="${esc(f.id)}"><span class="folder-icon">📁</span><span class="folder-name">${esc(f.name)}</span><span class="folder-sub">${countLabel}</span>${f.note?`<span class="folder-note">${esc(f.note)}</span>`:""}</button><div class="actions"><button type="button" class="order-step" data-step-folder="${esc(f.id)}" data-step="-1" aria-label="資料夾往前移">↑</button><button type="button" class="order-step" data-step-folder="${esc(f.id)}" data-step="1" aria-label="資料夾往後移">↓</button><button type="button" class="folder-rename" data-rename-folder="${esc(f.id)}">✎ 編輯</button><button type="button" class="del folder-delete" data-delete-folder="${esc(f.id)}">🗑 刪除</button></div></article>`;
 }
 async function createWishlistFolder(){
-  const name=prompt("資料夾名稱，例如：3COINS、無印良品");if(name===null)return;
-  const clean=name.trim().slice(0,40);if(!clean)return;
-  if(wishlistFolders.some(f=>f.name.toLowerCase()===clean.toLowerCase())){alert("這個資料夾名稱已經存在。");return}
-  const {data}=await db.auth.getUser(),u=data.user;if(!u)return;
-  const payload={user_id:u.id,share_group_id:selectedScope==="group"?selectedGroupId:null,name:clean,category:cat||"全部",area:view,sort_order:wishlistFolders.length};
-  const r=await db.from("wishlist_folders").insert(payload);
-  if(r.error){alert(r.error.message);return}await load();
+  openFolderForm();
 }
 async function renameWishlistFolder(id){
-  const f=wishlistFolders.find(x=>x.id===id);if(!f)return;
-  const name=prompt("修改資料夾名稱",f.name);if(name===null)return;
-  const clean=name.trim().slice(0,40);if(!clean)return;
-  let q=db.from("wishlist_folders").update({name:clean}).eq("id",id);
-  if(selectedScope==="private")q=q.is("share_group_id",null);else q=q.eq("share_group_id",selectedGroupId);
-  const r=await q;if(r.error){alert(r.error.message);return}await load();
+  const f=wishlistFolders.find(x=>x.id===id);if(!f)return;openFolderForm(f);
+}
+function openFolderForm(folder=null){
+  const form=$("#form");
+  $("#modal").classList.remove("hidden");
+  $("#mtitle").textContent=folder?"編輯資料夾":"新增資料夾";
+  form.innerHTML=`<label>資料夾名稱<input name="folder_name" maxlength="40" required placeholder="請輸入資料夾名稱" value="${esc(folder?.name||"")}"></label><label>備註／地點<textarea name="folder_note" placeholder="可填寫店家地址、地點或其他提醒">${esc(folder?.note||"")}</textarea></label><div class="actions2"><button type="button" class="cancel" id="folderCancel">取消</button><button type="submit" class="save">${folder?"儲存修改":"建立資料夾"}</button></div>`;
+  $("#fmsg").textContent="";$("#folderCancel").onclick=close;
+  form.onsubmit=async e=>{e.preventDefault();if(saving)return;const fd=new FormData(form),name=String(fd.get("folder_name")||"").trim().slice(0,40),note=String(fd.get("folder_note")||"").trim();if(!name){$("#fmsg").textContent="請先輸入資料夾名稱。";return}if(wishlistFolders.some(f=>f.name.toLowerCase()===name.toLowerCase()&&f.id!==folder?.id)){$("#fmsg").textContent="這個資料夾名稱已經存在。";return}saving=true;const btn=form.querySelector(".save");btn.disabled=true;btn.textContent="儲存中…";
+    let result;
+    if(folder){let q=db.from("wishlist_folders").update({name,note}).eq("id",folder.id);if(selectedScope==="private")q=q.is("share_group_id",null);else q=q.eq("share_group_id",selectedGroupId);result=await q}
+    else{const {data}=await db.auth.getUser(),u=data.user;if(!u){saving=false;btn.disabled=false;$("#fmsg").textContent="登入狀態已失效，請重新登入。";return}result=await db.from("wishlist_folders").insert({user_id:u.id,share_group_id:selectedScope==="group"?selectedGroupId:null,name,note,category:cat||"全部",area:view,sort_order:wishlistFolders.length})}
+    saving=false;if(result.error){btn.disabled=false;btn.textContent=folder?"儲存修改":"建立資料夾";$("#fmsg").textContent=`儲存失敗：${result.error.message}`;return}close();await load();
+  };
 }
 async function deleteWishlistFolder(id){
   const f=wishlistFolders.find(x=>x.id===id);if(!f)return;
@@ -219,6 +226,8 @@ async function deleteWishlistFolder(id){
   const mr=await move;if(mr.error){alert(mr.error.message);return}
   const r=await db.from("wishlist_folders").delete().eq("id",id);if(r.error){alert(r.error.message);return}await load();
 }
+async function stepItemOrder(id,delta){const arr=[...rows],i=arr.findIndex(x=>String(x.id)===String(id)),j=i+delta;if(i<0||j<0||j>=arr.length)return;const [item]=arr.splice(i,1);arr.splice(j,0,item);await persistWishlistOrder(arr)}
+async function stepFolderOrder(id,delta){const arr=[...wishlistFolders],i=arr.findIndex(x=>String(x.id)===String(id)),j=i+delta;if(i<0||j<0||j>=arr.length)return;const [item]=arr.splice(i,1);arr.splice(j,0,item);for(let k=0;k<arr.length;k++){const r=await db.from("wishlist_folders").update({sort_order:k}).eq("id",arr[k].id);if(r.error){alert(`排序儲存失敗：${r.error.message}`);return}}await load()}
 async function moveWishlistItem(id,folderId){
   const table=view==="todo"?"todos":view==="memo"?"memos":view;
   let q=db.from(table).update({folder_id:folderId,sort_order:Date.now()}).eq("id",id);
@@ -252,7 +261,7 @@ function formatDate(d){if(!d)return"";const p=String(d).split("-");return p.leng
 function formatRange(start,end){if(start&&end&&start!==end)return `${formatDate(start)} ～ ${formatDate(end)}`;return formatDate(start||end)}
 function scopeBadge(r){return ""}
 function card(n,m,x,r,att=""){return `<article class="card" data-id="${esc(r.id)}"><div class="name">${n}${scopeBadge(r)}</div>${m?`<div class="meta">${m}</div>`:""}${x?`<div>${x}</div>`:""}${r.note?`<div class="meta">${esc(r.note)}</div>`:""}${att}${folderViewId?`<div class="actions"><button type="button" class="move-root" data-move-root="${esc(r.id)}">↩ 移出資料夾</button>${actions(r.id)}</div>`:actions(r.id)}</article>`}
-function actions(id){return `<div class="actions"><button class="edit" data-id="${id}">✎ 編輯</button><button class="del" data-id="${id}">🗑 刪除</button></div>`}
+function actions(id){return `<div class="actions"><button type="button" class="order-step" data-step-item="${esc(id)}" data-step="-1" aria-label="往前移">↑</button><button type="button" class="order-step" data-step-item="${esc(id)}" data-step="1" aria-label="往後移">↓</button><button class="edit" data-id="${esc(id)}">✎ 編輯</button><button class="del" data-id="${esc(id)}">🗑 刪除</button></div>`}
 
 function attachmentsHtml(id){
   const arr=attachmentsByItem[String(id)]||[];
@@ -437,6 +446,55 @@ function openForm(t,r=null){
     input.onchange=()=>{const files=[...input.files||[]];const status=$("#imageSelectionStatus"),list=$("#imageSelectionList");if(!files.length){status.textContent="尚未選取新圖片";status.classList.remove("selected");list.innerHTML="";return}status.textContent=`✓ 已選取 ${files.length} 張圖片，儲存時會一併上傳`;status.classList.add("selected");list.innerHTML=files.map(f=>`<span>📷 ${esc(f.name)}</span>`).join("");};
   }
 }
+function batchField(label,name,value="",type="text",placeholder=""){
+  return `<label class="batch-label">${label}<input name="${name}" type="${type}" value="${esc(value)}" placeholder="${esc(placeholder)}"></label>`;
+}
+function batchFieldsFor(t,i){
+  const p=`b${i}-`;
+  if(t==="food")return batchField("店家名稱＊",p+"name")+batchField("捷運站",p+"mrt")+batchField("出口",p+"exit")+batchField("步行分鐘",p+"walk_minutes","","number")+batchField("Google Maps",p+"maps_url","","url")+`<label class="batch-label">備註<textarea name="${p}note"></textarea></label>`;
+  if(t==="wishlist")return batchField("商品名稱＊",p+"name")+batchField("購買地點",p+"purchase_place")+`<label class="batch-label">備註<textarea name="${p}note"></textarea></label>`;
+  if(t==="watchlist")return batchField("劇名／電影名＊",p+"name");
+  if(t==="todo")return batchField("名稱＊",p+"title")+batchField("開始日期",p+"start_date","","date")+batchField("結束日期",p+"end_date","","date")+batchField("時間",p+"event_time","","time")+batchField("地點",p+"location")+`<label class="batch-label">備註<textarea name="${p}note"></textarea></label>`;
+  return batchField("標題＊",p+"title")+`<label class="batch-label">內容<textarea name="${p}content"></textarea></label>`+`<label class="batch-label">其他網址<textarea name="${p}urls" placeholder="一行一個網址"></textarea></label>`;
+}
+function clearBatchState(){batchObjectUrls.forEach(URL.revokeObjectURL);batchObjectUrls=[];batchEntries=[]}
+function openBatchForm(files){
+  clearBatchState();batchEntries=files.map(file=>({file,objectUrl:URL.createObjectURL(file),recordId:null,recordSaved:false,uploaded:false,status:"待儲存"}));batchObjectUrls=batchEntries.map(x=>x.objectUrl);
+  const cards=batchEntries.map((entry,i)=>`<section class="batch-photo-card" data-batch-card="${i}"><div class="batch-photo-head"><img src="${entry.objectUrl}" alt=""><div><b>照片 ${i+1}</b><small>${esc(entry.file.name)}</small><span class="batch-status" data-batch-status="${i}">待儲存</span></div></div><div class="batch-fields">${batchFieldsFor(view,i)}</div></section>`).join("");
+  const categoryField=view==="food"?field("分類",`<select name="batch_category">${allCategories().map(x=>`<option ${x===cat?"selected":""}>${esc(x)}</option>`).join("")}</select>`):view==="wishlist"?field("地區",`<select name="batch_country">${allCategories().map(x=>`<option ${x===cat?"selected":""}>${esc(x)}</option>`).join("")}</select>`):view==="watchlist"?field("分類",`<select name="batch_category">${allCategories().map(x=>`<option ${x===cat?"selected":""}>${esc(x)}</option>`).join("")}</select>`):view==="todo"?field("類型",`<select name="batch_event_type">${allCategories().map(x=>`<option ${x===cat?"selected":""}>${esc(x)}</option>`).join("")}</select>`):"";
+  editing=null;$("#modal").classList.remove("hidden");$("#mtitle").textContent=`批次新增｜${files.length} 張照片`;
+  $("#form").innerHTML=`<p class="batch-intro">每張照片各自建立一筆資料。先填寫有＊的名稱，再按全部儲存；若中途失敗，可以直接重試，已成功的項目不會重複新增。</p>${categoryField}<div class="batch-progress" id="batchProgress">尚未開始儲存</div><div class="batch-photo-list">${cards}</div><div class="actions2"><button type="button" class="cancel" id="cancel">取消</button><button type="submit" class="save">全部儲存</button></div>`;
+  $("#cancel").onclick=close;$("#form").onsubmit=e=>saveBatch(e);
+  $("#form").addEventListener("input",e=>e.target.closest(".batch-photo-card")?.classList.remove("batch-invalid"));
+}
+function setBatchStatus(i,status,kind="") {const el=$(`[data-batch-status="${i}"]`);if(el){el.textContent=status;el.className=`batch-status ${kind}`}}
+async function saveBatch(e){
+  e.preventDefault();if(localStorage.getItem("myLittleSpaceImageConsent")!=="yes"){$("#fmsg").textContent="請先同意使用圖片附件。";return}if(saving)return;
+  const form=$("#form"),fd=new FormData(form),btn=form.querySelector(".save"),table=view==="todo"?"todos":view==="memo"?"memos":view,area=view;
+  // Validate every required title before writing anything, avoiding silent skips.
+  const missing=[];batchEntries.forEach((entry,i)=>{const key=view==="todo"||view==="memo"?"title":"name";const value=String(fd.get(`b${i}-${key}`)||"").trim();if(!entry.recordSaved&&!value)missing.push(i+1)});
+  if(missing.length){missing.forEach(n=>{const card=$(`[data-batch-card="${n-1}"]`);card?.classList.add("batch-invalid")});$("#fmsg").textContent=`請先補上第 ${missing.join("、")} 張照片的名稱（＊）。尚未開始儲存。`;return}
+  saving=true;btn.disabled=true;btn.textContent="儲存中…";$("#fmsg").textContent="";const progress=$("#batchProgress");
+  try{
+    const {data:uData}=await db.auth.getUser(),u=uData.user;if(!u)throw new Error("登入狀態已失效，請重新登入。");
+    let completed=0;for(let i=0;i<batchEntries.length;i++){
+      const entry=batchEntries[i];if(entry.uploaded){completed++;continue}
+      setBatchStatus(i,"處理中…","working");progress.textContent=`正在處理 ${i+1}/${batchEntries.length} 張照片`;
+      const get=k=>String(fd.get(`b${i}-${k}`)||"").trim();let v={user_id:u.id,share_group_id:selectedScope==="group"?selectedGroupId:null,folder_id:folderViewId||null,sort_order:Date.now()+i};
+      if(view==="food")Object.assign(v,{name:get("name"),category:fd.get("batch_category")||cat,mrt:get("mrt"),exit:get("exit"),walk_minutes:get("walk_minutes")?Number(get("walk_minutes")):null,maps_url:get("maps_url"),note:get("note")});
+      if(view==="wishlist")Object.assign(v,{name:get("name"),country:fd.get("batch_country")||cat,purchase_place:get("purchase_place"),note:get("note")});
+      if(view==="watchlist")Object.assign(v,{name:get("name"),category:fd.get("batch_category")||cat});
+      if(view==="todo")Object.assign(v,{title:get("title"),event_type:fd.get("batch_event_type")||cat,start_date:get("start_date")||null,end_date:get("end_date")||null,event_time:get("event_time")||null,location:get("location"),note:get("note"),done:false});
+      if(view==="memo")Object.assign(v,{title:get("title"),content:get("content"),urls:get("urls"),category:null,table_data:null});
+      if(!entry.recordSaved){const ins=await db.from(table).insert(v).select().single();if(ins.error){setBatchStatus(i,"資料儲存失敗","failed");throw new Error(`第 ${i+1} 張資料儲存失敗：${ins.error.message}`)}entry.recordId=ins.data.id;entry.recordSaved=true;}
+      try{await uploadSingleAttachment(area,entry.recordId,u.id,entry.file);entry.uploaded=true;entry.status="完成";setBatchStatus(i,"✓ 完成","done")}catch(err){setBatchStatus(i,"圖片上傳失敗，可重試","failed");throw new Error(`第 ${i+1} 張資料已建立，但圖片上傳失敗：${err.message||err}`)}
+      completed++;progress.textContent=`已完成 ${completed}/${batchEntries.length} 張照片`;
+    }
+    progress.textContent=`✓ 全部完成，共 ${batchEntries.length} 筆資料`;close();clearBatchState();await load();
+  }catch(err){$("#fmsg").textContent=err.message||String(err);progress.textContent="部分項目已完成；可直接再次按「全部儲存」繼續，不會重複建立已完成資料。"}
+  finally{saving=false;const current=$("#form .save");if(current){current.disabled=false;current.textContent="重新儲存未完成項目"}}
+}
+
 function chooser(){
   $("#fmsg").textContent="";
   $("#modal").classList.remove("hidden");
@@ -444,7 +502,7 @@ function chooser(){
   $("#form").innerHTML=`<div class="tiles"><button type="button" class="tile pink" data-new="food">🍽️ 食物</button><button type="button" class="tile purple" data-new="wishlist">🛍️ 購物</button><button type="button" class="tile blue" data-new="watchlist">🎬 影劇</button><button type="button" class="tile green" data-new="todo">🧩 生活管理</button><button type="button" class="tile memo-tile" data-new="memo">📝 備忘錄</button></div>`;
   $$('[data-new]').forEach(b=>b.onclick=()=>openForm(b.dataset.new))
 }
-function close(){$("#modal").classList.add("hidden");editing=null}
+function close(){$("#modal").classList.add("hidden");editing=null;pendingSave=null;if(batchEntries.length)clearBatchState()}
 function askConfirm(message,yesText="是",noText="否"){return new Promise(resolve=>{const m=$("#confirmModal");if(!m){resolve(false);return}$("#confirmText").textContent=message;$("#confirmYes").textContent=yesText;$("#confirmNo").textContent=noText;m.classList.remove("hidden");const done=v=>{m.classList.add("hidden");$("#confirmYes").onclick=null;$("#confirmNo").onclick=null;resolve(v)};$("#confirmYes").onclick=()=>done(true);$("#confirmNo").onclick=()=>done(false)})}
 
 async function loadGroups(){
@@ -500,6 +558,15 @@ async function shareManager(){
 $("#share").onclick=shareManager;
 
 
+async function uploadSingleAttachment(t,itemId,userId,file){
+  if(!file||!file.type.startsWith("image/"))return;
+  const ext=(file.name.split(".").pop()||"jpg").toLowerCase().replace(/[^a-z0-9]/g,"").slice(0,8)||"jpg";
+  const path=`${userId}/${t}/${itemId}/${crypto.randomUUID()}.${ext}`;
+  const up=await db.storage.from(ATTACH_BUCKET).upload(path,file,{upsert:false,contentType:file.type});if(up.error)throw up.error;
+  const pub=db.storage.from(ATTACH_BUCKET).getPublicUrl(path);
+  const ins=await db.from("attachments").insert({user_id:userId,item_type:t,item_id:String(itemId),file_name:file.name,storage_path:path,public_url:pub.data.publicUrl});if(ins.error){await db.storage.from(ATTACH_BUCKET).remove([path]);throw ins.error;}
+}
+
 async function uploadAttachments(t,itemId,userId,input){
   const files=[...(input?.files||[])];
   if(!files.length)return;
@@ -508,57 +575,31 @@ async function uploadAttachments(t,itemId,userId,input){
   }
   for(const file of files){
     if(!file.type.startsWith("image/"))continue;
-    const ext=(file.name.split(".").pop()||"jpg").toLowerCase().replace(/[^a-z0-9]/g,"").slice(0,8)||"jpg";
-    const path=`${userId}/${t}/${itemId}/${crypto.randomUUID()}.${ext}`;
-    const up=await db.storage.from(ATTACH_BUCKET).upload(path,file,{upsert:false,contentType:file.type});
-    if(up.error)throw up.error;
-    const pub=db.storage.from(ATTACH_BUCKET).getPublicUrl(path);
-    const ins=await db.from("attachments").insert({user_id:userId,item_type:t,item_id:String(itemId),file_name:file.name,storage_path:path,public_url:pub.data.publicUrl});
-    if(ins.error)throw ins.error;
+    await uploadSingleAttachment(t,itemId,userId,file);
   }
 }
 
 async function save(e,t){
-  e.preventDefault();if(saving)return;saving=true;const saveButton=$("#form .save");if(saveButton){saveButton.disabled=true;saveButton.textContent="儲存中…"}$("#fmsg").textContent="";
-  const v=Object.fromEntries(new FormData(e.target).entries());
-  const {data:uData}=await db.auth.getUser(),u=uData.user;
-  if(!u){$("#fmsg").textContent="登入狀態已失效，請重新登入。";saving=false;if(saveButton){saveButton.disabled=false;saveButton.textContent="儲存"}return}
-  delete v.imageFiles;
-  delete v.share_group_id;
-  v.share_group_id=selectedScope==="group" ? selectedGroupId : null;
-  v.folder_id=editing?.folder_id??folderViewId??null;if(!editing)v.sort_order=Date.now();
-  if(t==="food"&&v.walk_minutes==="")v.walk_minutes=null;
-  if(t==="todo"){
-    if(!v.start_date)v.start_date=null;
-    if(!v.end_date)v.end_date=null;
-    if(!v.event_time)v.event_time=null;
-    if(v.start_date&&v.end_date&&v.end_date<v.start_date){$("#fmsg").textContent="結束日期不能早於開始日期。";saving=false;if(saveButton){saveButton.disabled=false;saveButton.textContent="儲存"}return}
-    v.done=editing?.done??false;
-  }
-  if(t==="memo"){
-    v.category=null;
-    v.table_data=JSON.stringify(readTable());
-    if(v.table_data==="null")v.table_data=null;
-  }
-  const table=t==="todo"?"todos":t==="memo"?"memos":t;
-  let r;
-  if(editing){
-    let q=db.from(table).update(v).eq("id",editing.id);
-    if(selectedScope==="private")q=q.eq("user_id",u.id).is("share_group_id",null);
-    else q=q.eq("share_group_id",selectedGroupId);
-    r=await q;
-  }else{
-    r=await db.from(table).insert({...v,user_id:u.id}).select().single();
-  }
-  if(r.error){$("#fmsg").textContent=r.error.message;saving=false;if(saveButton){saveButton.disabled=false;saveButton.textContent="儲存"}return}
-  const itemId=editing?.id||r.data?.id;
+  e.preventDefault();if(saving)return;saving=true;const form=$("#form"),saveButton=form.querySelector(".save");if(saveButton){saveButton.disabled=true;saveButton.textContent="儲存中…"}$("#fmsg").textContent="";
   try{
-    await uploadAttachments(t,itemId,u.id,$("#imageFiles"));
-  }catch(err){
-    $("#fmsg").textContent="資料已儲存，但圖片附件上傳失敗："+(err.message||err);saving=false;if(saveButton){saveButton.disabled=false;saveButton.textContent="儲存"}
-    return;
-  }
-  close();saving=false;if(view===t){if(folderViewId&&v.folder_id==null)folderViewId=null;await load();}
+    const v=Object.fromEntries(new FormData(e.target).entries());
+    const {data:uData,error:authError}=await db.auth.getUser(),u=uData.user;if(authError||!u)throw new Error("登入狀態已失效，請重新登入。");
+    delete v.imageFiles;delete v.share_group_id;v.share_group_id=selectedScope==="group"?selectedGroupId:null;
+    v.folder_id=editing?.folder_id??folderViewId??null;if(!editing&&!pendingSave)v.sort_order=Date.now();
+    if(t==="food"&&v.walk_minutes==="")v.walk_minutes=null;
+    if(t==="todo"){
+      if(!v.start_date)v.start_date=null;if(!v.end_date)v.end_date=null;if(!v.event_time)v.event_time=null;
+      if(v.start_date&&v.end_date&&v.end_date<v.start_date)throw new Error("結束日期不能早於開始日期。");v.done=editing?.done??false;
+    }
+    if(t==="memo"){v.category=null;v.table_data=JSON.stringify(readTable());if(v.table_data==="null")v.table_data=null;}
+    const table=t==="todo"?"todos":t==="memo"?"memos":t;
+    let itemId=editing?.id||pendingSave?.itemId;
+    if(editing||pendingSave){let q=db.from(table).update(v).eq("id",itemId);if(selectedScope==="private")q=q.eq("user_id",u.id).is("share_group_id",null);else q=q.eq("share_group_id",selectedGroupId);const r=await q;if(r.error)throw r.error;if(!pendingSave)pendingSave={itemId,table,uploadedKeys:[]};}
+    else{const r=await db.from(table).insert({...v,user_id:u.id}).select().single();if(r.error)throw r.error;itemId=r.data.id;pendingSave={itemId,table,uploadedKeys:[]};}
+    const files=[...($("#imageFiles")?.files||[])];for(const file of files){const key=[file.name,file.size,file.lastModified,file.type].join("|");if(pendingSave.uploadedKeys.includes(key))continue;try{await uploadSingleAttachment(t,itemId,u.id,file);pendingSave.uploadedKeys.push(key)}catch(err){throw new Error("資料已儲存，但圖片附件上傳失敗："+(err.message||err)+"。可直接重試，已成功上傳的照片不會重複附加。")}}
+    pendingSave=null;close();if(view===t){if(folderViewId&&v.folder_id==null)folderViewId=null;await load();}
+  }catch(err){$("#fmsg").textContent=err.message||String(err);}
+  finally{saving=false;const b=$("#form .save");if(b){b.disabled=false;b.textContent=pendingSave?"重試儲存／上傳":"儲存"}}
 }
 
 async function loadUserName(){

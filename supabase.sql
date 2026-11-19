@@ -503,3 +503,8 @@ create index if not exists todos_folder_order_idx on public.todos(folder_id,sort
 create index if not exists memos_folder_order_idx on public.memos(folder_id,sort_order,created_at);
 create index if not exists area_folders_private_idx on public.wishlist_folders(user_id,area,category,sort_order) where share_group_id is null;
 create index if not exists area_folders_group_idx on public.wishlist_folders(share_group_id,area,category,sort_order) where share_group_id is not null;
+
+
+-- v34: folder notes for all areas.
+alter table public.wishlist_folders add column if not exists note text;
+notify pgrst, 'reload schema';
